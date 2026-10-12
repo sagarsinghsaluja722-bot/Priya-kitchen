@@ -1,0 +1,16 @@
+{
+  "_comment": "Starting menu, loaded only the first time the site runs. After that, edit the menu from the admin page (/admin).",
+  "settings": {
+    "delivery_fee": 0,
+    "free_delivery_above": 0,
+    "min_order": 0
+  },
+  "items": [
+    { "name": "Mini Tiffin", "description": "3 rotis, dal and one sabzi.", "price": 79, "category": "Tiffins" },
+    { "name": "Regular Tiffin", "description": "4 rotis, dal, sabzi, rice and salad.", "price": 99, "category": "Tiffins" },
+    { "name": "Deluxe Tiffin", "description": "4 rotis, dal, paneer sabzi, rice, raita, salad and a sweet.", "price": 149, "category": "Tiffins" },
+    { "name": "Extra Roti", "description": "Fresh tawa roti.", "price": 10, "category": "Add-ons" },
+    { "name": "Extra Rice", "description": "One bowl of steamed rice.", "price": 30, "category": "Add-ons" },
+    { "name": "Sweet of the day", "description": "Ask us what is on today.", "price": 30, "category": "Add-ons" }
+  ]
+}

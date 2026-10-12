@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Priya Kitchen — Admin</title>
+<meta name="theme-color" content="#1F4D3A">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tabs .pill { min-height: 44px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .stat { background: #fff; border-radius: 16px; padding: 16px; }
+  .stat b { display: block; font-family: var(--display); font-size: 28px; }
+  .stat span { color: var(--muted); font-size: 14px; }
+  .admin-order { background: #fff; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 10px; border: 2px solid transparent; }
+  .admin-order.fresh { border-color: var(--turmeric); }
+  .admin-order dl { display: grid; grid-template-columns: 90px 1fr; gap: 4px 10px; margin: 0; font-size: 15px; }
+  .admin-order dt { color: var(--muted); }
+  .admin-order dd { margin: 0; }
+  .status-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .status-btns .btn { min-height: 44px; padding: 0 16px; font-size: 15px; }
+  .btn-danger { background: #fff; color: var(--red); border: 1.5px solid var(--red); }
+  .menu-row { background: #fff; border-radius: 14px; padding: 14px; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+  .menu-row .wide { grid-column: 1 / -1; }
+  .switch { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-weight: 500; }
+  .switch input { width: 20px; height: 20px; accent-color: var(--green); }
+  .table-wrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap topbar-in">
+    <a href="/admin" class="brand"><span class="logo" aria-hidden="true">P</span><span class="brand-name">Priya Kitchen · Admin</span></a>
+    <nav class="nav" aria-label="Admin">
+      <a href="/" target="_blank" rel="noopener">View website</a>
+      <button type="button" class="linkish hidden" id="logoutBtn">Logout</button>
+    </nav>
+  </div>
+</header>
+<main id="admin" class="page"><div class="spinner" aria-label="Loading"></div></main>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="/admin.js"></script>
+</body>
+</html>

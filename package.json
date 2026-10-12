@@ -1,0 +1,15 @@
+{
+  "name": "priya-kitchen",
+  "version": "1.0.0",
+  "description": "Priya Kitchen — tiffin ordering website with OTP login, Razorpay payments, WhatsApp order alerts and live order tracking",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "demo": "DEMO_MODE=true node server.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {}
+}
