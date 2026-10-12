@@ -128,12 +128,12 @@
         '<p>Choose your tiffin, pay online, and track your order live — from our kitchen to your door.</p>' +
         '<div class="hero-actions"><a href="#menu" class="btn btn-accent btn-lg">Order a tiffin</a><a href="#/orders" class="btn btn-ghost-light btn-lg">Track my order</a></div></div>' +
         '<div class="hero-art"><div class="tile tile-a">Fresh every day</div><div class="tile tile-b">Packed with care</div>' +
-        '<div class="tile tile-c"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#1F4D3A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span><strong>Prepaid orders only.</strong> Pay securely by UPI, card or net banking — we start cooking once payment is done.</span></div></div>' +
+        '<div class="tile tile-c"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#1F4D3A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span><strong>Prepaid orders only.</strong> Pay by UPI (GPay, PhonePe, Paytm) — we start cooking once your payment is confirmed.</span></div></div>' +
       '</div></section>' +
       '<section class="band"><div class="wrap section"><h2>How it works</h2><div class="steps">' +
-        step(1, 'Log in with your phone', 'Quick OTP login. First time? Just add your name and address once.') +
+        step(1, 'Log in with your phone', 'Quick login with your number. First time? Just add your name and address once.') +
         step(2, 'Pick your tiffin', 'Add tiffins and extras to your cart.') +
-        step(3, 'Pay online', 'Your order reaches our kitchen on WhatsApp the moment payment succeeds.') +
+        step(3, 'Pay online', 'Pay by UPI. Your order reaches our kitchen on WhatsApp instantly.') +
         step(4, 'Track it live', 'Follow every step under “Your orders” until your tiffin arrives.') +
       '</div></div></section>' +
       '<section id="menu"><div class="wrap section"><div class="menu-layout">' +
@@ -174,8 +174,8 @@
     var disabled = !c.acceptingOrders || (c.minOrder > 0 && t.subtotal < c.minOrder) || state.paying;
     return h + addr +
       '<div class="field"><label for="note">Note for the kitchen (optional)</label><input id="note" class="input" maxlength="200" placeholder="e.g. less spicy"></div>' +
-      '<button type="button" class="btn btn-accent btn-block btn-lg" data-action="pay"' + (disabled ? ' disabled' : '') + '>' + (state.paying ? 'Opening payment…' : 'Pay ' + rupees(t.total) + ' &amp; place order') + '</button>' +
-      '<p class="small">Prepaid only · UPI, cards &amp; net banking · Secured by Razorpay</p>' +
+      '<button type="button" class="btn btn-accent btn-block btn-lg" data-action="pay"' + (disabled ? ' disabled' : '') + '>' + (state.paying ? 'Please wait…' : (c.payMode === 'upi' ? 'Continue to pay ' + rupees(t.total) : 'Pay ' + rupees(t.total) + ' &amp; place order')) + '</button>' +
+      '<p class="small">' + (c.payMode === 'upi' ? 'Prepaid only · Pay by UPI — GPay, PhonePe, Paytm or any UPI app' : 'Prepaid only · UPI, cards &amp; net banking') + '</p>' +
       (c.demoPayment ? '<div class="notice notice-warn">Test mode: payment is simulated. No money is charged.</div>' : '');
   }
 
@@ -194,10 +194,20 @@
     var L = state.login;
     var body;
     if (L.step === 'phone') {
-      body = '<p class="muted">We\'ll send a one-time code to your mobile number.</p>' +
+      body = '<p class="muted">' + (state.config.authMode === 'pin' ? 'Enter your mobile number to log in or create your account.' : 'We\'ll send a one-time code to your mobile number.') + '</p>' +
         '<form data-form="phone" class="field" novalidate><label for="phone">Mobile number</label>' +
         '<div class="phone-row"><span class="cc">+91</span><input id="phone" class="input" type="tel" inputmode="numeric" autocomplete="tel-national" maxlength="10" value="' + esc(L.phone) + '" required></div>' +
-        '<button type="submit" class="btn btn-primary btn-block" style="margin-top:8px">Send OTP</button></form>';
+        '<button type="submit" class="btn btn-primary btn-block" style="margin-top:8px">' + (state.config.authMode === 'pin' ? 'Continue' : 'Send OTP') + '</button></form>';
+    } else if (L.step === 'pin') {
+      body = (L.hasPin
+          ? '<p class="muted">Welcome back! Enter the 4-digit PIN you created for <strong>+91 ' + esc(L.phone) + '</strong>.</p>'
+          : '<p class="muted">New here? Create a 4-digit PIN for <strong>+91 ' + esc(L.phone) + '</strong>. You\'ll use it to log in next time.</p>') +
+        '<form data-form="pin" style="display:flex;flex-direction:column;gap:12px" novalidate>' +
+        '<div class="field"><label for="pin">' + (L.hasPin ? 'Your PIN' : 'Create PIN') + '</label><input id="pin" class="input otp-input" type="password" inputmode="numeric" autocomplete="' + (L.hasPin ? 'current-password' : 'new-password') + '" maxlength="4" required></div>' +
+        (L.hasPin ? '' : '<div class="field"><label for="pin2">Type the PIN again</label><input id="pin2" class="input otp-input" type="password" inputmode="numeric" autocomplete="new-password" maxlength="4" required></div>') +
+        '<button type="submit" class="btn btn-primary btn-block">' + (L.hasPin ? 'Log in' : 'Create PIN &amp; continue') + '</button></form>' +
+        (L.hasPin ? '<p class="muted" style="font-size:14px">Forgot your PIN? Message us on WhatsApp and we\'ll reset it.</p>' : '') +
+        '<div class="row-actions"><button type="button" class="btn-link" data-action="change-phone">Change number</button></div>';
     } else if (L.step === 'otp') {
       body = '<p class="muted">Enter the 4-digit code sent to <strong>+91 ' + esc(L.phone) + '</strong>.</p>' +
         (L.demoOtp ? '<div class="notice notice-warn">Test mode — your OTP is <strong>' + esc(L.demoOtp) + '</strong>. On the live site it arrives by SMS.</div>' : '') +
@@ -227,25 +237,95 @@
       '</div></div></section>';
   }
 
+  // ---------- direct UPI payment ----------
+  function loadQr() {
+    if (window.QRCode) return Promise.resolve();
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  function viewPay(id) {
+    if (!state.user) { state.redirect = '#/pay/' + id; location.hash = '#/login'; return; }
+    app.innerHTML = '<section class="page"><div class="narrow"><div class="spinner" aria-label="Loading"></div></div></section>';
+    api('/api/orders/' + encodeURIComponent(id) + '/upi').then(function (r) {
+      var o = r.order, u = r.upi;
+      if (o.status !== 'pending_payment') { location.hash = '#/orders'; return; }
+      var mobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+      app.innerHTML = '<section class="page"><div class="narrow" style="max-width:520px"><div class="panel">' +
+        '<h1>Pay ' + rupees(u.amount) + '</h1>' +
+        '<p class="muted">Order <strong>#' + esc(o.code) + '</strong> · ' + o.items.map(function (l) { return l.qty + ' × ' + esc(l.name); }).join(', ') + '</p>' +
+        '<div class="notice notice-warn"><strong>Step 1:</strong> Pay exactly <strong>' + rupees(u.amount) + '</strong> to Priya Kitchen by UPI.</div>' +
+        (mobile ? '<a href="' + esc(u.link) + '" class="btn btn-accent btn-block btn-lg">Pay with GPay / PhonePe / Paytm</a>' : '') +
+        '<div style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px 0">' +
+          '<div id="qr" style="background:#fff;padding:10px;border:1px solid var(--line);border-radius:12px"></div>' +
+          '<span class="muted" style="font-size:14px">' + (mobile ? 'Or scan this QR from another phone' : 'Scan with any UPI app') + '</span></div>' +
+        '<div class="deliver-box" style="flex-direction:row;align-items:center;justify-content:space-between;gap:10px"><span>UPI ID: <strong>' + esc(u.upiId) + '</strong></span><button type="button" class="btn-link" data-action="copy-upi" data-upi="' + esc(u.upiId) + '" style="min-height:36px">Copy</button></div>' +
+        '<div class="notice notice-warn" style="margin-top:6px"><strong>Step 2:</strong> After paying, open the payment in your UPI app and copy the <strong>UPI reference number</strong> (12 digits, also called UTR or UPI Ref No.).</div>' +
+        '<form data-form="utr" data-id="' + o.id + '" style="display:flex;flex-direction:column;gap:12px" novalidate>' +
+          '<div class="field"><label for="utr">UPI reference number (UTR)</label><input id="utr" class="input" inputmode="numeric" autocomplete="off" maxlength="22" placeholder="e.g. 428517390164" required></div>' +
+          '<button type="submit" class="btn btn-primary btn-block btn-lg">I have paid — place my order</button></form>' +
+        '<p class="small">Priya Kitchen checks your payment and confirms your order. You can track it live under “Your orders”.</p>' +
+        '</div></div></section>';
+      loadQr().then(function () {
+        var el = document.getElementById('qr');
+        if (el && window.QRCode) new window.QRCode(el, { text: u.link, width: 200, height: 200, correctLevel: window.QRCode.CorrectLevel.M });
+      }).catch(function () {
+        var el = document.getElementById('qr');
+        if (el) el.outerHTML = '<span class="muted">Pay to the UPI ID below.</span>';
+      });
+    }).catch(function (e) { toast(e.message); location.hash = '#/orders'; });
+  }
+
+  function viewSubmitted(code) {
+    app.innerHTML = '<section class="page"><div class="narrow" style="max-width:540px"><div class="panel" style="align-items:flex-start">' +
+      '<span class="tick">' + ICON_CHECK + '</span><h1>Order sent!</h1>' +
+      '<p>Your order <strong>#' + esc(code) + '</strong> and payment details have been sent to Priya Kitchen.</p>' +
+      '<div class="notice notice-ok">We\'re checking your UPI payment. Once confirmed, we start cooking — follow every step live under “Your orders”.</div>' +
+      '<div class="row-actions"><a href="#/orders" class="btn btn-primary">Track your order</a><a href="#/" class="btn btn-outline">Back to menu</a></div>' +
+      '</div></div></section>';
+  }
+
+  function statusLabel(status) {
+    if (status === 'cancelled') return 'Cancelled';
+    if (status === 'pending_payment') return 'Payment pending';
+    if (status === 'payment_submitted') return 'Confirming payment';
+    var s = STEPS.filter(function (x) { return x[0] === status; })[0];
+    return s ? s[1] : status;
+  }
+
   function orderHtml(o) {
+    if (o.status === 'pending_payment') {
+      return '<article class="order"><div class="order-head"><div><div class="order-code">Order #' + esc(o.code) + '</div><div class="muted" style="font-size:14px">' + when(o.createdAt) + ' · ' + rupees(o.total) + '</div></div><span class="badge">Payment pending</span></div>' +
+        '<p style="color:var(--ink-2)">' + o.items.map(function (l) { return l.qty + ' × ' + esc(l.name); }).join(', ') + '</p>' +
+        '<div class="notice notice-warn">This order is not placed yet — payment is not done.</div>' +
+        '<a href="#/pay/' + o.id + '" class="btn btn-accent" style="align-self:flex-start">Complete payment</a></article>';
+    }
+    var steps = o.utr
+      ? [['payment_submitted', 'Payment sent', 'UPI ref ' + o.utr + (o.status === 'payment_submitted' ? ' · waiting for Priya Kitchen to confirm' : '')], ['placed', 'Payment confirmed', 'Priya Kitchen received your payment']].concat(STEPS.slice(1))
+      : STEPS;
     var idx = -1;
-    STEPS.forEach(function (s, i) { if (s[0] === o.status) idx = i; });
+    steps.forEach(function (s, i) { if (s[0] === o.status) idx = i; });
     var times = {};
     (o.history || []).forEach(function (h) { times[h.status] = h.at; });
     var badgeClass = o.status === 'delivered' ? 'badge done' : o.status === 'cancelled' ? 'badge cancel' : 'badge';
-    var label = o.status === 'cancelled' ? 'Cancelled' : (STEPS[idx] ? STEPS[idx][1] : o.status);
+    var label = statusLabel(o.status);
     var items = o.items.map(function (l) { return l.qty + ' × ' + esc(l.name); }).join(', ');
     var track;
     if (o.status === 'cancelled') {
-      track = '<div class="notice notice-err">This order was cancelled. Your refund will be sent back to your original payment method. For help, message us on WhatsApp.</div>';
+      track = '<div class="notice notice-err">This order was cancelled. If you paid, Priya Kitchen will return your money. For help, message us on WhatsApp.</div>';
     } else {
-      track = '<div class="timeline">' + STEPS.map(function (s, i) {
+      track = '<div class="timeline">' + steps.map(function (s, i) {
         var cls = 'tl' + (i <= idx ? ' reached' : '') + (i < idx ? ' passed' : '') + (i === idx && o.status !== 'delivered' ? ' current' : '');
         var sub = i <= idx ? (times[s[0]] ? when(times[s[0]]) + ' · ' : '') + s[2] : 'Pending';
         return '<div class="' + cls + '"><div class="tl-rail"><span class="dot"></span><span class="rail"></span></div><div class="tl-text"><span class="tl-title">' + s[1] + '</span><span class="tl-sub">' + esc(sub) + '</span></div></div>';
       }).join('') + '</div>';
     }
-    return '<article class="order"><div class="order-head"><div><div class="order-code">Order #' + esc(o.code) + '</div><div class="muted" style="font-size:14px">' + when(o.paidAt || o.createdAt) + ' · ' + rupees(o.total) + ' paid</div></div><span class="' + badgeClass + '">' + esc(label) + '</span></div>' +
+    return '<article class="order"><div class="order-head"><div><div class="order-code">Order #' + esc(o.code) + '</div><div class="muted" style="font-size:14px">' + when(o.paidAt || o.createdAt) + ' · ' + rupees(o.total) + (o.status === 'payment_submitted' ? ' · payment being checked' : ' paid') + '</div></div><span class="' + badgeClass + '">' + esc(label) + '</span></div>' +
       '<p style="color:var(--ink-2)">' + items + '</p>' + track + '</article>';
   }
 
@@ -281,7 +361,7 @@
         if (!found) state.orders.unshift(o);
       }
       if (currentRoute() === 'orders') viewOrders();
-      else if (o.status !== 'placed') toast('Order #' + o.code + ': ' + (o.status === 'cancelled' ? 'Cancelled' : (STEPS.filter(function (s) { return s[0] === o.status; })[0] || [0, o.status])[1]));
+      else if (o.status !== 'payment_submitted') toast('Order #' + o.code + ': ' + (o.status === 'placed' && o.utr ? 'Payment confirmed' : statusLabel(o.status)));
     });
     es.onerror = function () {
       if (es.readyState === 2) { state.stream = null; setTimeout(connectStream, 5000); }
@@ -322,6 +402,14 @@
       .then(function (r) {
         state.user.address = address;
         state.editAddress = false;
+        if (r.upi) {
+          state.paying = false;
+          state.cart = {};
+          saveCart();
+          state.orders = null;
+          location.hash = '#/pay/' + r.orderId;
+          return;
+        }
         if (r.demoPayment) {
           return api('/api/checkout/demo-pay', { method: 'POST', body: { orderId: r.orderId } }).then(function () { paid(r.code); });
         }
@@ -379,6 +467,10 @@
     else if (a === 'pay') pay();
     else if (a === 'change-phone') { state.login = { step: 'phone', phone: state.login.phone, demoOtp: '' }; viewLogin(); }
     else if (a === 'resend') sendOtp(state.login.phone);
+    else if (a === 'copy-upi') {
+      var v = b.getAttribute('data-upi');
+      (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject()).then(function () { toast('UPI ID copied'); }, function () { toast('UPI ID: ' + v); });
+    }
   });
 
   document.getElementById('account').addEventListener('click', function (e) {
@@ -398,20 +490,35 @@
     if (f === 'phone') {
       var phone = document.getElementById('phone').value.replace(/\D/g, '');
       if (!/^[6-9]\d{9}$/.test(phone)) { toast('Please enter a valid 10-digit mobile number.'); return; }
-      sendOtp(phone, btn);
+      if (state.config.authMode === 'pin') {
+        btn.disabled = true;
+        api('/api/auth/pin-check', { method: 'POST', body: { phone: phone } })
+          .then(function (r) { state.login = { step: 'pin', phone: phone, hasPin: r.hasPin, demoOtp: '' }; viewLogin(); })
+          .catch(function (err) { btn.disabled = false; toast(err.message); });
+      } else sendOtp(phone, btn);
+    } else if (f === 'pin') {
+      var pin = document.getElementById('pin').value.replace(/\D/g, '');
+      if (pin.length !== 4) { toast('Your PIN must be 4 digits.'); return; }
+      var pin2El = document.getElementById('pin2');
+      if (pin2El && pin2El.value !== pin) { toast('The two PINs don\'t match. Please try again.'); return; }
+      btn.disabled = true;
+      api('/api/auth/pin-login', { method: 'POST', body: { phone: state.login.phone, pin: pin } })
+        .then(loggedIn)
+        .catch(function (err) { btn.disabled = false; toast(err.message); });
     } else if (f === 'otp') {
       var code = document.getElementById('otp').value.replace(/\D/g, '');
       if (code.length !== 4) { toast('Please enter the 4-digit OTP.'); return; }
       btn.disabled = true;
       api('/api/auth/verify-otp', { method: 'POST', body: { phone: state.login.phone, code: code } })
-        .then(function (r) {
-          state.user = r.user;
-          state.orders = null;
-          renderAccount();
-          connectStream();
-          if (!r.user.profileComplete) { state.login.step = 'profile'; viewLogin(); }
-          else finishLogin();
-        })
+        .then(loggedIn)
+        .catch(function (err) { btn.disabled = false; toast(err.message); });
+    } else if (f === 'utr') {
+      var utr = document.getElementById('utr').value.replace(/\s/g, '');
+      if (!/^[A-Za-z0-9]{10,22}$/.test(utr)) { toast('Please enter the 12-digit UPI reference number from your payment app.'); return; }
+      btn.disabled = true;
+      var oid = e.target.getAttribute('data-id');
+      api('/api/orders/' + oid + '/upi-paid', { method: 'POST', body: { utr: utr } })
+        .then(function (r) { state.orders = null; location.hash = '#/submitted/' + r.order.code; })
         .catch(function (err) { btn.disabled = false; toast(err.message); });
     } else if (f === 'profile') {
       var name = document.getElementById('pname').value.trim();
@@ -434,6 +541,15 @@
         toast('OTP sent to +91 ' + phone);
       })
       .catch(function (err) { if (btn) btn.disabled = false; toast(err.message); });
+  }
+
+  function loggedIn(r) {
+    state.user = r.user;
+    state.orders = null;
+    renderAccount();
+    connectStream();
+    if (!r.user.profileComplete) { state.login.step = 'profile'; viewLogin(); }
+    else finishLogin();
   }
 
   function finishLogin() {
@@ -462,6 +578,8 @@
       viewLogin();
     } else if (r === 'orders') viewOrders();
     else if (r === 'success') viewSuccess(parts[1] || '');
+    else if (r === 'pay') viewPay(parts[1] || '');
+    else if (r === 'submitted') viewSubmitted(parts[1] || '');
     else {
       viewHome();
       if (r === 'cart') { var c = document.getElementById('cart'); if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' }); }

@@ -51,7 +51,7 @@ p { margin: 0; }
 .cart-btn { background: var(--turmeric) !important; color: var(--ink) !important; border-radius: 999px; font-weight: 700 !important; gap: 8px; padding: 0 16px !important; margin-left: 4px; }
 
 /* buttons */
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; padding: 0 22px; border-radius: 12px; border: 0; font-weight: 700; font-size: 16px; text-decoration: none; }
+.btn { display: inline-flex; align-items: center; justify-content: center; text-align: center; gap: 8px; min-height: 48px; padding: 0 22px; border-radius: 12px; border: 0; font-weight: 700; font-size: 16px; text-decoration: none; }
 .btn-primary { background: var(--green); color: #fff; }
 .btn-primary:hover { background: var(--green-dark); }
 .btn-accent { background: var(--turmeric); color: var(--ink); }

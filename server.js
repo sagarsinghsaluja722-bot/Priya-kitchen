@@ -30,19 +30,25 @@ const otp = require('./lib/otp');
 const rzp = require('./lib/razorpay');
 const { notifyOwner, providerName } = require('./lib/notify');
 
-if (!rzp.configured() && !DEMO) {
-  console.error('ERROR: set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET (or DEMO_MODE=true for testing only).');
+// How customers pay: Razorpay (if keys are set), otherwise direct UPI to your UPI ID.
+const UPI_ID = (process.env.UPI_ID || '').trim();
+const UPI_NAME = (process.env.UPI_NAME || 'Priya Kitchen').trim();
+const PAY_MODE = rzp.configured() ? 'razorpay' : UPI_ID ? 'upi' : DEMO ? 'demo' : '';
+if (!PAY_MODE) {
+  console.error('ERROR: set UPI_ID (your UPI ID, e.g. priyakitchen@okaxis) so customers can pay you.');
   process.exit(1);
 }
-if (!otp.smsConfigured() && !DEMO) {
-  console.error('ERROR: set TWOFACTOR_API_KEY so customers receive their OTP (or DEMO_MODE=true for testing only).');
+if (UPI_ID && !/^[\w.\-]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,64}$/.test(UPI_ID)) {
+  console.error('ERROR: UPI_ID does not look like a UPI ID (example: name@okaxis).');
   process.exit(1);
 }
+// How customers log in: SMS OTP (if 2Factor is set up), otherwise a 4-digit PIN they choose.
+const AUTH_MODE = process.env.AUTH_MODE || (otp.smsConfigured() || DEMO ? 'otp' : 'pin');
 
 const PORT = Number(process.env.PORT) || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const FLOW = ['placed', 'accepted', 'preparing', 'out_for_delivery', 'delivered'];
-const VISIBLE = [...FLOW, 'cancelled'];
+const VISIBLE = ['payment_submitted', ...FLOW, 'cancelled'];
 
 // ---- helpers -----------------------------------------------------------
 const iso = () => new Date().toISOString();
@@ -83,6 +89,7 @@ function publicOrder(o) {
     address: o.address,
     note: o.note,
     status: o.status,
+    utr: o.utr || '',
     history: JSON.parse(o.history || '[]'),
     createdAt: o.created_at,
     paidAt: o.paid_at,
@@ -136,16 +143,39 @@ const markPaidTx = transaction((id, paymentId) => {
   return { row: getOrder(id), changed: true };
 });
 
+function alertOwner(row) {
+  notifyOwner(publicOrder(row))
+    .then((sent) => { if (sent) db.prepare('UPDATE orders SET notified = 1 WHERE id = ?').run(row.id); })
+    .catch((e) => console.error('[whatsapp] alert failed for ' + orderCode(row.id) + ':', e.message));
+}
+
 function markPaid(id, paymentId) {
   const { row, changed } = markPaidTx(id, paymentId);
   if (changed) {
     emitOrder(row, true);
-    notifyOwner(publicOrder(row))
-      .then((sent) => { if (sent) db.prepare('UPDATE orders SET notified = 1 WHERE id = ?').run(id); })
-      .catch((e) => console.error('[whatsapp] alert failed for ' + orderCode(id) + ':', e.message));
+    alertOwner(row);
   }
   return row;
 }
+
+// Direct UPI: build the payment link the customer's UPI app opens.
+function upiInfo(row) {
+  const amount = Number(row.total).toFixed(2);
+  const note = 'Order ' + orderCode(row.id);
+  // UPI apps expect the @ in the UPI ID unencoded (UPI_ID is validated at start-up).
+  const link = `upi://pay?pa=${UPI_ID}&pn=${encodeURIComponent(UPI_NAME)}&am=${amount}&cu=INR&tn=${encodeURIComponent(note)}`;
+  return { link, upiId: UPI_ID, payee: UPI_NAME, amount: row.total, note };
+}
+
+// Customer says they paid by UPI and gives the reference (UTR) number → owner checks and confirms.
+const submitUpiTx = transaction((id, utr) => {
+  const row = getOrder(id);
+  if (!row || row.status !== 'pending_payment') return { row, changed: false };
+  const now = iso();
+  db.prepare("UPDATE orders SET status = 'payment_submitted', utr = ?, updated_at = ?, history = ? WHERE id = ?")
+    .run(utr, now, JSON.stringify([{ status: 'payment_submitted', at: now }]), id);
+  return { row: getOrder(id), changed: true };
+});
 
 // ---- tiny HTTP framework -----------------------------------------------
 const routes = [];
@@ -268,7 +298,10 @@ route('GET', '/api/config', (req, res) => {
   const s = getSettings();
   sendJson(res, 200, {
     demo: DEMO,
-    demoPayment: !rzp.configured(),
+    demoPayment: PAY_MODE === 'demo',
+    payMode: PAY_MODE,
+    authMode: AUTH_MODE,
+    upiId: UPI_ID,
     acceptingOrders: s.accepting_orders === '1',
     deliveryFee: int(s.delivery_fee),
     freeDeliveryAbove: int(s.free_delivery_above),
@@ -302,6 +335,50 @@ route('POST', '/api/auth/verify-otp', (req, res) => {
   }
   setAuth(res, 'pk_user', { typ: 'user', uid: Number(user.id) }, 60);
   sendJson(res, 200, { user: publicUser(user) });
+});
+
+// PIN login (used when SMS OTP is not set up): first time you choose a 4-digit PIN, after that you enter it.
+function hashPin(pin, salt) {
+  salt = salt || crypto.randomBytes(16).toString('hex');
+  return salt + ':' + crypto.scryptSync(pin + ':' + JWT_SECRET, salt, 32).toString('hex');
+}
+function checkPin(pin, stored) {
+  const [salt, h] = String(stored || '').split(':');
+  if (!salt || !h) return false;
+  const a = Buffer.from(hashPin(pin, salt).split(':')[1], 'hex');
+  const b = Buffer.from(h, 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+route('POST', '/api/auth/pin-check', (req, res) => {
+  if (AUTH_MODE !== 'pin') throw httpError(404, 'Not found.');
+  const phone = normPhone(req.body.phone);
+  if (!phone) throw httpError(400, 'Please enter a valid 10-digit mobile number.');
+  if (!allow('pincheck-ip:' + req.ip, 60, 3600e3)) throw httpError(429, 'Too many requests. Please try again later.');
+  const user = db.prepare('SELECT pin_hash FROM users WHERE phone = ?').get(phone);
+  sendJson(res, 200, { phone, hasPin: !!(user && user.pin_hash) });
+});
+
+route('POST', '/api/auth/pin-login', (req, res) => {
+  if (AUTH_MODE !== 'pin') throw httpError(404, 'Not found.');
+  const phone = normPhone(req.body.phone);
+  const pin = String(req.body.pin || '');
+  if (!phone) throw httpError(400, 'Please enter a valid 10-digit mobile number.');
+  if (!/^\d{4}$/.test(pin)) throw httpError(400, 'Your PIN must be 4 digits.');
+  if (!allow('pin-ip:' + req.ip, 30, 3600e3) || !allow('pin-phone:' + phone, 8, 15 * 60e3)) {
+    throw httpError(429, 'Too many attempts. Please wait 15 minutes, or message us on WhatsApp to reset your PIN.');
+  }
+  let user = db.prepare('SELECT * FROM users WHERE phone = ?').get(phone);
+  if (user && user.pin_hash) {
+    if (!checkPin(pin, user.pin_hash)) throw httpError(401, 'Wrong PIN. Forgot it? Message us on WhatsApp and we will reset it.');
+  } else if (user) {
+    db.prepare('UPDATE users SET pin_hash = ? WHERE id = ?').run(hashPin(pin), user.id);
+  } else {
+    const info = db.prepare('INSERT INTO users (phone, pin_hash, created_at) VALUES (?, ?, ?)').run(phone, hashPin(pin), iso());
+    user = getUser(Number(info.lastInsertRowid));
+  }
+  setAuth(res, 'pk_user', { typ: 'user', uid: Number(user.id) }, 60);
+  sendJson(res, 200, { user: publicUser(getUser(user.id)) });
 });
 
 route('POST', '/api/auth/logout', (req, res) => {
@@ -361,7 +438,8 @@ route('POST', '/api/checkout', async (req, res) => {
   const id = Number(info.lastInsertRowid);
   const code = orderCode(id);
 
-  if (!rzp.configured()) return sendJson(res, 200, { orderId: id, code, total, demoPayment: true });
+  if (PAY_MODE === 'demo') return sendJson(res, 200, { orderId: id, code, total, demoPayment: true });
+  if (PAY_MODE === 'upi') return sendJson(res, 200, { orderId: id, code, total, upi: upiInfo(getOrder(id)) });
 
   try {
     const r = await rzp.createOrder(total * 100, code);
@@ -398,9 +476,39 @@ route('POST', '/api/checkout/demo-pay', (req, res) => {
   sendJson(res, 200, { order: publicOrder(markPaid(Number(row.id), 'demo')) });
 });
 
+// Direct UPI: details to pay one of your own unpaid orders
+route('GET', '/api/orders/:id/upi', (req, res) => {
+  const u = needUser(req);
+  if (PAY_MODE !== 'upi') throw httpError(404, 'Not found.');
+  const row = db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(int(req.params.id), u.id);
+  if (!row) throw httpError(404, 'Order not found.');
+  sendJson(res, 200, { order: publicOrder(row), upi: upiInfo(row) });
+});
+
+// Direct UPI: customer submits the UPI reference number after paying
+route('POST', '/api/orders/:id/upi-paid', (req, res) => {
+  const u = needUser(req);
+  if (PAY_MODE !== 'upi') throw httpError(404, 'Not found.');
+  const utr = String(req.body.utr || '').replace(/\s/g, '').toUpperCase();
+  if (!/^[A-Z0-9]{10,22}$/.test(utr)) throw httpError(400, 'Please enter the 12-digit UPI reference number (UTR) from your payment app.');
+  const row = db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(int(req.params.id), u.id);
+  if (!row) throw httpError(404, 'Order not found.');
+  if (row.status !== 'pending_payment') return sendJson(res, 200, { order: publicOrder(row) });
+  const used = db.prepare("SELECT id FROM orders WHERE utr = ? AND id != ? AND status != 'cancelled'").get(utr, row.id);
+  if (used) throw httpError(400, 'This UPI reference number was already used for another order. Please check it.');
+  const r = submitUpiTx(row.id, utr);
+  if (r.changed) {
+    emitOrder(r.row, true);
+    alertOwner(r.row);
+  }
+  sendJson(res, 200, { order: publicOrder(r.row) });
+});
+
 route('GET', '/api/orders', (req, res) => {
   const u = needUser(req);
-  const rows = db.prepare(`SELECT * FROM orders WHERE user_id = ? AND status IN (${qs(VISIBLE)}) ORDER BY id DESC LIMIT 50`).all(u.id, ...VISIBLE);
+  const recent = new Date(Date.now() - 3 * 3600e3).toISOString();
+  const rows = db.prepare(`SELECT * FROM orders WHERE user_id = ? AND (status IN (${qs(VISIBLE)}) OR (status = 'pending_payment' AND ? = 'upi' AND created_at > ?)) ORDER BY id DESC LIMIT 50`)
+    .all(u.id, ...VISIBLE, PAY_MODE, recent);
   sendJson(res, 200, { orders: rows.map(publicOrder) });
 });
 
@@ -433,12 +541,12 @@ route('POST', '/api/admin/logout', (req, res) => {
 
 route('GET', '/api/admin/me', (req, res) => {
   needAdmin(req);
-  sendJson(res, 200, { ok: true, whatsapp: providerName(), demo: DEMO, payments: rzp.configured() });
+  sendJson(res, 200, { ok: true, whatsapp: providerName(), demo: DEMO, payMode: PAY_MODE, authMode: AUTH_MODE, upiId: UPI_ID });
 });
 
 route('GET', '/api/admin/orders', (req, res) => {
   needAdmin(req);
-  const statuses = req.query.get('scope') === 'all' ? VISIBLE : FLOW.slice(0, 4);
+  const statuses = req.query.get('scope') === 'all' ? VISIBLE : ['payment_submitted', ...FLOW.slice(0, 4)];
   const rows = db.prepare(`SELECT * FROM orders WHERE status IN (${qs(statuses)}) ORDER BY id DESC LIMIT 300`).all(...statuses);
   const today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10); // date in India
   const todayRows = db.prepare("SELECT total FROM orders WHERE paid_at IS NOT NULL AND status != 'cancelled' AND substr(datetime(paid_at, '+330 minutes'), 1, 10) = ?").all(today);
@@ -451,14 +559,16 @@ route('GET', '/api/admin/orders', (req, res) => {
 route('POST', '/api/admin/orders/:id/status', (req, res) => {
   needAdmin(req);
   const status = String(req.body.status || '');
-  if (!VISIBLE.includes(status)) throw httpError(400, 'Unknown status.');
+  if (![...FLOW, 'cancelled'].includes(status)) throw httpError(400, 'Unknown status.');
   const row = getOrder(int(req.params.id));
   if (!row || !VISIBLE.includes(row.status)) throw httpError(404, 'Order not found.');
   if (row.status === status) return sendJson(res, 200, { order: publicOrder(row) });
   const history = JSON.parse(row.history || '[]');
   const now = iso();
   history.push({ status, at: now });
-  db.prepare('UPDATE orders SET status = ?, history = ?, updated_at = ? WHERE id = ?').run(status, JSON.stringify(history), now, row.id);
+  // Confirming a UPI payment marks the order as paid.
+  const paidAt = row.status === 'payment_submitted' && status !== 'cancelled' ? now : row.paid_at;
+  db.prepare('UPDATE orders SET status = ?, history = ?, updated_at = ?, paid_at = ? WHERE id = ?').run(status, JSON.stringify(history), now, paidAt, row.id);
   const updated = getOrder(row.id);
   emitOrder(updated, false);
   sendJson(res, 200, { order: publicOrder(updated) });
@@ -502,6 +612,15 @@ route('PUT', '/api/admin/menu/:id', (req, res) => {
 route('DELETE', '/api/admin/menu/:id', (req, res) => {
   needAdmin(req);
   db.prepare('DELETE FROM menu_items WHERE id = ?').run(int(req.params.id));
+  sendJson(res, 200, { ok: true });
+});
+
+route('POST', '/api/admin/reset-pin', (req, res) => {
+  needAdmin(req);
+  const phone = normPhone(req.body.phone);
+  if (!phone) throw httpError(400, 'Enter the customer’s 10-digit mobile number.');
+  const info = db.prepare('UPDATE users SET pin_hash = NULL WHERE phone = ?').run(phone);
+  if (!info.changes) throw httpError(404, 'No customer with that number.');
   sendJson(res, 200, { ok: true });
 });
 
@@ -568,5 +687,6 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Priya Kitchen running on http://localhost:${PORT}`);
   if (DEMO) console.log('*** DEMO MODE: OTP shown on screen; payment simulated if Razorpay keys are missing. Never use on the live site. Admin password: ' + (process.env.ADMIN_PASSWORD ? '(from .env)' : 'admin123'));
+  console.log('Payments: ' + PAY_MODE + (UPI_ID ? ' → ' + UPI_ID : '') + ' · Login: ' + AUTH_MODE);
   console.log('WhatsApp alerts via: ' + providerName() + ' → +' + (process.env.OWNER_WHATSAPP || '(OWNER_WHATSAPP not set)'));
 });
