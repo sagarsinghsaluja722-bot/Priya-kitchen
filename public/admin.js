@@ -113,6 +113,7 @@
       if (o.status !== 'cancelled' && o.status !== 'delivered') btns += '<button type="button" class="btn btn-danger" data-status="cancelled" data-id="' + o.id + '">' + (checking ? 'Payment not received' : 'Cancel') + '</button>';
       return '<article class="admin-order' + (state.fresh[o.id] ? ' fresh' : '') + '">' +
         (checking ? '<div class="notice notice-warn">Check your UPI / bank app for <strong>' + rupees(o.total) + '</strong> with reference <strong>' + esc(o.utr) + '</strong>. If it arrived, tap “Payment received”.</div>' : '') +
+        (state.info && state.info.payMode === 'razorpay' && !cod && !o.utr && o.paidAt && o.status === 'placed' ? '<div class="notice notice-ok"><strong>Payment received: ' + rupees(o.total) + '</strong> by ' + esc(methodName) + ' — confirmed automatically by Razorpay. Accept the order to start cooking.</div>' : '') +
         (cod && o.status !== 'delivered' && o.status !== 'cancelled' ? '<div class="notice notice-warn"><strong>Cash on delivery</strong> — collect <strong>' + rupees(o.total) + '</strong> when you deliver.</div>' : '') +
         '<div class="order-head"><div><div class="order-code">#' + esc(o.code) + ' · ' + rupees(o.total) + ' <span class="muted" style="font-weight:500;font-size:14px">' + (checking ? 'to check' : cod ? (o.status === 'delivered' ? 'cash collected' : 'cash on delivery') : 'paid') + '</span></div><div class="muted" style="font-size:14px">' + when(o.paidAt || o.createdAt) + '</div></div><span class="' + badge + '">' + esc(LABEL[o.status] || o.status) + '</span></div>' +
         '<dl><dt>Customer</dt><dd>' + esc(o.name) + ' · <a href="tel:+91' + esc(o.phone) + '">+91 ' + esc(o.phone) + '</a> · <a href="https://wa.me/91' + esc(o.phone) + '" target="_blank" rel="noopener">WhatsApp</a></dd>' +
@@ -175,9 +176,11 @@
       state.fresh[o.id] = true;
       ding();
       flashTitle('🔔 New order #' + o.code);
-      toast('New order #' + o.code + ' — ' + rupees(o.total));
+      var paidOnline = o.paidAt && o.payMethod !== 'cod' && !o.utr;
+      var what = paidOnline ? 'Payment received ' + rupees(o.total) : o.payMethod === 'cod' ? 'Cash on delivery ' + rupees(o.total) : rupees(o.total);
+      toast('New order #' + o.code + ' — ' + what);
       if (window.Notification && Notification.permission === 'granted') {
-        try { new Notification('New order #' + o.code, { body: o.name + ' · ' + rupees(o.total) }); } catch (e) { /* ignore */ }
+        try { new Notification((paidOnline ? '💰 Payment received — order #' : 'New order #') + o.code, { body: o.name + ' · ' + what }); } catch (e) { /* ignore */ }
       }
       loadOrders().then(function () { if (state.tab === 'orders') render(); });
     });

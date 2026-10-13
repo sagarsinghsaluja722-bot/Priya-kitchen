@@ -176,13 +176,18 @@ function upiInfo(row) {
 function payMethods() {
   const s = getSettings();
   const list = [];
-  if (UPI_ID) {
+  if (rzp.configured()) {
+    // Razorpay: the payment sheet opens on the chosen app and confirms the payment automatically.
+    list.push({ id: 'gpay', label: 'Google Pay', sub: 'Opens GPay — order confirmed automatically' });
+    list.push({ id: 'phonepe', label: 'PhonePe', sub: 'Opens PhonePe — order confirmed automatically' });
+    list.push({ id: 'paytm', label: 'Paytm', sub: 'Opens Paytm — order confirmed automatically' });
+    list.push({ id: 'razorpay', label: 'Other UPI, cards & net banking', sub: 'Any UPI app, debit/credit card or bank' });
+  } else if (UPI_ID) {
     list.push({ id: 'gpay', label: 'Google Pay', sub: 'Pay with the GPay app' });
     list.push({ id: 'phonepe', label: 'PhonePe', sub: 'Pay with the PhonePe app' });
     list.push({ id: 'paytm', label: 'Paytm', sub: 'Pay with the Paytm app' });
     list.push({ id: 'upi', label: 'Any UPI app / QR', sub: 'BHIM, bank apps, or scan a QR code' });
   }
-  if (rzp.configured()) list.push({ id: 'razorpay', label: 'UPI, cards & net banking', sub: 'Secure online payment' });
   if (s.cod_enabled === '1') list.push({ id: 'cod', label: 'Cash on delivery', sub: 'Pay in cash when your tiffin arrives' });
   if (!list.length && PAY_MODE === 'demo') list.push({ id: 'demo', label: 'Test payment', sub: 'Test mode — no money is taken' });
   return list;
@@ -473,13 +478,13 @@ route('POST', '/api/checkout', async (req, res) => {
     return sendJson(res, 200, { orderId: id, code, total, cod: true });
   }
   if (method === 'demo') return sendJson(res, 200, { orderId: id, code, total, demoPayment: true });
-  if (['gpay', 'phonepe', 'paytm', 'upi'].includes(method)) return sendJson(res, 200, { orderId: id, code, total, method, upi: upiInfo(getOrder(id)) });
+  if (!rzp.configured() && ['gpay', 'phonepe', 'paytm', 'upi'].includes(method)) return sendJson(res, 200, { orderId: id, code, total, method, upi: upiInfo(getOrder(id)) });
 
   try {
     const r = await rzp.createOrder(total * 100, code);
     db.prepare('UPDATE orders SET rzp_order_id = ? WHERE id = ?').run(r.id, id);
     sendJson(res, 200, {
-      orderId: id, code, total,
+      orderId: id, code, total, method,
       razorpay: { keyId: rzp.keyId(), orderId: r.id, amount: r.amount, currency: r.currency },
       prefill: { name: u.name, contact: '+91' + u.phone }
     });

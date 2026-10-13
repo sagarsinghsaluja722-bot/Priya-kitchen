@@ -519,14 +519,26 @@
           return api('/api/checkout/demo-pay', { method: 'POST', body: { orderId: r.orderId } }).then(function () { paid(r.code); });
         }
         return loadRazorpay().then(function () {
-          var rz = new window.Razorpay({
+          // Show the app the customer picked at the top of Razorpay's payment sheet.
+          var APP = { gpay: ['google_pay', 'Google Pay'], phonepe: ['phonepe', 'PhonePe'], paytm: ['paytm', 'Paytm'] }[r.method];
+          var prefill = Object.assign({}, r.prefill);
+          var config;
+          if (APP) {
+            prefill.method = 'upi';
+            config = { display: {
+              blocks: { chosen: { name: 'Pay with ' + APP[1], instruments: [{ method: 'upi', flows: ['intent'], apps: [APP[0]] }] } },
+              sequence: ['block.chosen'],
+              preferences: { show_default_blocks: true }
+            } };
+          }
+          var opts = {
             key: r.razorpay.keyId,
             amount: r.razorpay.amount,
             currency: r.razorpay.currency,
             order_id: r.razorpay.orderId,
             name: 'Priya Kitchen',
             description: 'Order #' + r.code,
-            prefill: r.prefill,
+            prefill: prefill,
             theme: { color: '#1F4D3A' },
             handler: function (resp) {
               api('/api/checkout/verify', { method: 'POST', body: resp })
@@ -534,7 +546,9 @@
                 .catch(function (e) { setPaying(false); toast(e.message); });
             },
             modal: { ondismiss: function () { setPaying(false); toast('Payment cancelled. Your order was not placed.'); } }
-          });
+          };
+          if (config) opts.config = config;
+          var rz = new window.Razorpay(opts);
           rz.on('payment.failed', function (resp) {
             toast('Payment failed: ' + ((resp && resp.error && resp.error.description) || 'please try again.'));
           });
