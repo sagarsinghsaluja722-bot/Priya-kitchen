@@ -553,9 +553,9 @@ route('POST', '/api/orders/:id/upi-paid', (req, res) => {
 
 route('GET', '/api/orders', (req, res) => {
   const u = needUser(req);
-  const recent = new Date(Date.now() - 3 * 3600e3).toISOString();
-  const rows = db.prepare(`SELECT * FROM orders WHERE user_id = ? AND (status IN (${qs(VISIBLE)}) OR (status = 'pending_payment' AND pay_method IN ('gpay','phonepe','paytm','upi') AND created_at > ?)) ORDER BY id DESC LIMIT 50`)
-    .all(u.id, ...VISIBLE, recent);
+  // Only orders that were actually placed — unfinished payments are not shown.
+  const rows = db.prepare(`SELECT * FROM orders WHERE user_id = ? AND status IN (${qs(VISIBLE)}) ORDER BY id DESC LIMIT 50`)
+    .all(u.id, ...VISIBLE);
   sendJson(res, 200, { orders: rows.map(publicOrder) });
 });
 
