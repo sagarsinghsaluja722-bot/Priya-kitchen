@@ -509,7 +509,11 @@
     var list = state.orders.length
       ? state.orders.map(orderHtml).join('')
       : '<div class="panel" style="align-items:flex-start"><p class="muted">No orders yet. Your placed orders will show up here.</p><a href="#/" class="btn btn-primary">Order a tiffin</a></div>';
-    app.innerHTML = '<section class="page"><div class="medium">' + head + list + '</div></section>';
+    var banner = state.justPlaced
+      ? '<div class="notice notice-ok" role="status" style="display:flex;gap:10px;align-items:center;font-size:15px"><span class="tick" style="width:36px;height:36px;flex-shrink:0">' + ICON_CHECK + '</span><strong>' + esc(state.justPlaced.text) + '</strong></div>'
+      : '';
+    state.justPlaced = null;
+    app.innerHTML = '<section class="page"><div class="medium">' + head + banner + list + '</div></section>';
   }
 
   // ---------- live order updates ----------
@@ -577,7 +581,8 @@
           saveCart();
           state.orders = null;
           state.lastCod = { code: r.code, total: r.total };
-          location.hash = '#/placed/' + r.code;
+          state.justPlaced = { code: r.code, text: 'Order #' + r.code + ' placed! Please keep ' + rupees(r.total) + ' ready — cash on delivery.' };
+          location.hash = '#/orders';
           return;
         }
         if (r.upi) {
@@ -710,7 +715,9 @@
     state.cart = {};
     saveCart();
     state.orders = null;
-    location.hash = '#/success/' + code;
+    // Payment confirmed automatically → go straight to live order tracking.
+    state.justPlaced = { code: code, text: 'Payment successful — your order #' + code + ' is placed.' };
+    location.hash = '#/orders';
   }
 
   // ---------- events ----------
@@ -806,7 +813,11 @@
       btn.disabled = true;
       var oid = e.target.getAttribute('data-id');
       api('/api/orders/' + oid + '/upi-paid', { method: 'POST', body: { utr: utr } })
-        .then(function (r) { state.orders = null; location.hash = '#/submitted/' + r.order.code; })
+        .then(function (r) {
+          state.orders = null;
+          state.justPlaced = { code: r.order.code, text: 'Order #' + r.order.code + ' sent! Priya Kitchen will confirm your payment shortly.' };
+          location.hash = '#/orders';
+        })
         .catch(function (err) { btn.disabled = false; toast(err.message); });
     } else if (f === 'profile') {
       var name = document.getElementById('pname').value.trim();
