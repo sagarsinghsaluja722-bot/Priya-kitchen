@@ -185,15 +185,71 @@
     return state.method;
   }
 
+  var UPI_IDS = ['gpay', 'phonepe', 'paytm', 'upi'];
+  var APP_NAME = { gpay: 'Google Pay', phonepe: 'PhonePe', paytm: 'Paytm', upi: 'UPI app' };
+
+  function availableUpiApps() {
+    return ((state.config && state.config.payMethods) || []).filter(function (m) { return UPI_IDS.indexOf(m.id) >= 0; });
+  }
+
   function payBtnLabel(total) {
     var m = chosenMethod();
     if (state.paying) return 'Please wait…';
-    if (m === 'cod') return 'Place order · ' + rupees(total) + ' (cash on delivery)';
-    if (m === 'gpay') return 'Pay ' + rupees(total) + ' with Google Pay';
-    if (m === 'phonepe') return 'Pay ' + rupees(total) + ' with PhonePe';
-    if (m === 'paytm') return 'Pay ' + rupees(total) + ' with Paytm';
+    if (m === 'cod') return 'Place order · Cash on delivery';
+    if (m === 'gpay' || m === 'phonepe' || m === 'paytm') return 'Pay with ' + APP_NAME[m];
+    if (m === 'upi') return 'Pay ' + rupees(total) + ' with UPI';
     if (m === 'demo') return 'Place test order · ' + rupees(total);
     return 'Pay ' + rupees(total);
+  }
+
+  // Bottom sheet listing the UPI apps (like big shopping apps)
+  function upiIcon(id) {
+    var b = APP_BADGE[id] || ['₹', '#1F4D3A'];
+    return '<span class="pm-badge" style="background:' + b[1] + '" aria-hidden="true">' + b[0] + '</span>';
+  }
+
+  function openUpiSheet() {
+    closeUpiSheet();
+    var apps = availableUpiApps();
+    var cur = chosenMethod();
+    var wrap = document.createElement('div');
+    wrap.id = 'upiSheet';
+    wrap.className = 'sheet-wrap';
+    wrap.innerHTML = '<div class="sheet-backdrop" data-sheet="close"></div>' +
+      '<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">' +
+        '<div class="sheet-head"><h2 id="sheetTitle">Your UPI apps</h2><button type="button" class="sheet-x" data-sheet="close" aria-label="Close">' +
+        '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>' +
+        '<div class="sheet-list">' + apps.map(function (a) {
+          return '<button type="button" class="sheet-item' + (a.id === cur ? ' on' : '') + '" data-sheet-app="' + esc(a.id) + '">' +
+            '<span class="sheet-radio" aria-hidden="true"></span><span class="sheet-name">' + esc(a.label) + '</span>' + upiIcon(a.id) + '</button>';
+        }).join('') + '</div></div>';
+    document.body.appendChild(wrap);
+    document.body.style.overflow = 'hidden';
+    requestAnimationFrame(function () { wrap.classList.add('open'); });
+    var first = wrap.querySelector('.sheet-item.on') || wrap.querySelector('.sheet-item');
+    if (first) first.focus();
+    wrap.addEventListener('click', function (e) {
+      var pick = e.target.closest('[data-sheet-app]');
+      if (pick) {
+        var n = document.getElementById('note');
+        if (n) state.note = n.value;
+        state.method = pick.getAttribute('data-sheet-app');
+        state.upiApp = state.method;
+        closeUpiSheet();
+        viewCheckout();
+        var btn = document.getElementById('payBtn');
+        if (btn) btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+      if (e.target.closest('[data-sheet="close"]')) closeUpiSheet();
+    });
+    wrap.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeUpiSheet(); });
+  }
+
+  function closeUpiSheet() {
+    var s = document.getElementById('upiSheet');
+    if (s) s.remove();
+    document.body.style.overflow = '';
   }
 
   function viewCheckout() {
@@ -221,24 +277,45 @@
       : '<div class="deliver-box"><strong>' + esc(u.name) + ' · +91 ' + esc(u.phone) + '</strong><span class="muted">' + esc(u.address) + '</span>' +
         '<button type="button" class="btn-link" style="align-self:flex-start;padding:0;min-height:32px" data-action="edit-address">Change address</button></div>';
 
-    var methods = (c.payMethods || []).map(function (m) {
-      var b = APP_BADGE[m.id] || ['₹', '#1F4D3A'];
+    // Payment choices: one "Pay by any UPI App" row (opens the app sheet), then cards and cash on delivery.
+    var upiApps = availableUpiApps();
+    var upiOn = UPI_IDS.indexOf(method) >= 0;
+    var shownApp = upiOn ? method : (state.upiApp || (upiApps[0] && upiApps[0].id));
+    var methods = '';
+    if (upiApps.length) {
+      methods += '<div class="pm pm-upi' + (upiOn ? ' on' : '') + '">' +
+        '<label class="pm-row"><input type="radio" name="paymethod" value="' + esc(shownApp) + '"' + (upiOn ? ' checked' : '') + '>' +
+        (upiOn ? upiIcon(method) : '<span class="pm-badge upi-mark" aria-hidden="true">UPI</span>') +
+        '<span class="pm-text"><strong>Pay by any UPI App</strong><span class="muted">' + upiApps.filter(function (a) { return a.id !== 'upi'; }).map(function (a) { return a.label; }).join(', ') + ' and more</span></span></label>' +
+        (upiOn ? '<button type="button" class="upi-chip" data-action="choose-upi">' + esc(APP_NAME[method] === 'UPI app' ? 'Other UPI app' : APP_NAME[method]) +
+          '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>' : '') +
+        '</div>';
+    }
+    methods += (c.payMethods || []).filter(function (m) { return UPI_IDS.indexOf(m.id) < 0; }).map(function (m) {
       return '<label class="pm' + (m.id === method ? ' on' : '') + '"><input type="radio" name="paymethod" value="' + esc(m.id) + '"' + (m.id === method ? ' checked' : '') + '>' +
-        '<span class="pm-badge" style="background:' + b[1] + '" aria-hidden="true">' + b[0] + '</span>' +
-        '<span class="pm-text"><strong>' + esc(m.label) + '</strong><span class="muted">' + esc(m.sub) + '</span></span></label>';
+        upiIcon(m.id) + '<span class="pm-text"><strong>' + esc(m.label) + '</strong><span class="muted">' + esc(m.sub) + '</span></span></label>';
     }).join('');
 
     var blocked = !c.acceptingOrders ? 'We\'re not taking orders right now. Please check back soon.'
       : (c.minOrder > 0 && t.subtotal < c.minOrder) ? 'Minimum order is ' + rupees(c.minOrder) + '.' : '';
 
+    var summary = '<div class="panel co-confirm">' +
+      '<button type="button" id="payBtn" class="btn btn-accent btn-block btn-lg" data-action="pay"' + (blocked || state.paying ? ' disabled' : '') + '>' + payBtnLabel(t.total) + '</button>' +
+      '<div class="totals" style="border-top:0;padding-top:0"><div><span>Items:</span><span>' + rupees(t.subtotal) + '</span></div>' +
+      '<div><span>Delivery:</span><span>' + (t.fee ? rupees(t.fee) : 'Free') + '</span></div>' +
+      '<div class="grand"><span>Order Total:</span><span>' + rupees(t.total) + '</span></div></div>' +
+      (method === 'cod' ? '<p class="small" style="text-align:left">Pay ' + rupees(t.total) + ' in cash when your tiffin arrives.</p>' :
+        upiOn ? '<p class="small" style="text-align:left">' + (method === 'upi' ? 'Your UPI app' : APP_NAME[method]) + ' will open with ' + rupees(t.total) + ' filled in. Choose your bank, enter your UPI PIN, and your order is placed.</p>' : '') +
+      '</div>';
+
     app.innerHTML = '<section class="page"><div class="medium" style="max-width:640px">' +
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap"><h1>Checkout</h1><a href="#/" class="btn-link">+ Add more items</a></div>' +
-      '<div class="panel"><h2 class="co-h">Your order</h2>' + items + '</div>' +
-      '<div class="panel"><h2 class="co-h">Delivery details</h2>' + addr +
+      '<div class="panel"><h2 class="co-h">Delivering to ' + esc(u.name) + '</h2>' + addr +
         '<div class="field"><label for="note">Note for the kitchen (optional)</label><input id="note" class="input" maxlength="200" placeholder="e.g. less spicy, ring the bell" value="' + esc(state.note || '') + '"></div></div>' +
-      '<div class="panel"><h2 class="co-h" id="pm-h">How would you like to pay?</h2><div class="pm-list" role="radiogroup" aria-labelledby="pm-h">' + methods + '</div></div>' +
+      '<div class="panel"><h2 class="co-h">Your order</h2>' + items + '</div>' +
+      '<div class="panel"><h2 class="co-h" id="pm-h">Payment method</h2><div class="pm-list" role="radiogroup" aria-labelledby="pm-h">' + methods + '</div></div>' +
       (blocked ? '<div class="notice notice-warn">' + blocked + '</div>' : '') +
-      '<button type="button" id="payBtn" class="btn btn-accent btn-block btn-lg" data-action="pay"' + (blocked || state.paying ? ' disabled' : '') + '>' + payBtnLabel(t.total) + '</button>' +
+      summary +
       (method === 'demo' ? '<div class="notice notice-warn">Test mode: no money is taken.</div>' : '') +
       '</div></section>';
   }
@@ -519,6 +596,83 @@
           return api('/api/checkout/demo-pay', { method: 'POST', body: { orderId: r.orderId } }).then(function () { paid(r.code); });
         }
         return loadRazorpay().then(function () {
+          // Android: open the chosen UPI app directly with the amount filled in.
+          if (r.method !== 'razorpay' && r.method !== 'upi' && /Android/i.test(navigator.userAgent) && openUpiAppDirect(r)) return;
+          openRazorpaySheet(r);
+        });
+      })
+      .catch(function (e) {
+        setPaying(false);
+        if (e.status === 401) { state.user = null; renderAccount(); refreshCart(); }
+        toast(e.message);
+      });
+  }
+
+  var UPI_PKG = { gpay: 'com.google.android.apps.nbu.paisa.user', phonepe: 'com.phonepe.app', paytm: 'net.one97.paytm' };
+
+  function verifyAndFinish(r, resp) {
+    return api('/api/checkout/verify', { method: 'POST', body: resp })
+      .then(function () { hideWaiting(); paid(r.code); })
+      .catch(function (e) { hideWaiting(); setPaying(false); toast(e.message); });
+  }
+
+  // Opens GPay / PhonePe / Paytm straight away (Razorpay UPI intent). Returns false if not possible.
+  function openUpiAppDirect(r) {
+    var pkg = UPI_PKG[r.method];
+    if (!pkg) return false;
+    var rz;
+    try {
+      rz = new window.Razorpay({ key: r.razorpay.keyId });
+      if (typeof rz.createPayment !== 'function') return false;
+      rz.on('payment.success', function (resp) { verifyAndFinish(r, resp); });
+      rz.on('payment.error', function (resp) {
+        hideWaiting();
+        setPaying(false);
+        var msg = resp && resp.error && resp.error.description;
+        toast(msg ? 'Payment not completed: ' + msg : 'Payment not completed. Please try again.');
+      });
+      rz.createPayment({
+        amount: r.razorpay.amount,
+        currency: r.razorpay.currency,
+        order_id: r.razorpay.orderId,
+        contact: r.prefill && r.prefill.contact,
+        email: 'void@razorpay.com',
+        description: 'Order #' + r.code,
+        method: 'upi',
+        '_[flow]': 'intent',
+        upi_app_package_name: pkg
+      });
+    } catch (e) {
+      return false;
+    }
+    showWaiting(r);
+    return true;
+  }
+
+  // "Complete the payment in Google Pay" screen while the customer is in the UPI app
+  function showWaiting(r) {
+    hideWaiting();
+    var el = document.createElement('div');
+    el.id = 'payWait';
+    el.className = 'sheet-wrap open';
+    el.innerHTML = '<div class="sheet-backdrop"></div><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="waitTitle" style="text-align:center;align-items:center">' +
+      upiIcon(r.method) +
+      '<h2 id="waitTitle">Complete payment in ' + esc(APP_NAME[r.method]) + '</h2>' +
+      '<p class="muted">' + rupees(r.total) + ' for order #' + esc(r.code) + '. Choose your bank and enter your UPI PIN. This page updates by itself once you pay.</p>' +
+      '<div class="spinner" style="margin:6px auto" aria-label="Waiting for payment"></div>' +
+      '<button type="button" class="btn btn-outline btn-block" data-wait="other">' + esc(APP_NAME[r.method]) + ' didn\'t open? Pay another way</button></div>';
+    document.body.appendChild(el);
+    el.querySelector('[data-wait="other"]').addEventListener('click', function () { hideWaiting(); openRazorpaySheet(r); });
+  }
+
+  function hideWaiting() {
+    var el = document.getElementById('payWait');
+    if (el) el.remove();
+  }
+
+  // Razorpay's own payment sheet (all UPI apps, cards, net banking)
+  function openRazorpaySheet(r) {
+    return loadRazorpay().then(function () {
           // Show the app the customer picked at the top of Razorpay's payment sheet.
           var APP = { gpay: ['google_pay', 'Google Pay'], phonepe: ['phonepe', 'PhonePe'], paytm: ['paytm', 'Paytm'] }[r.method];
           var prefill = Object.assign({}, r.prefill);
@@ -540,11 +694,7 @@
             description: 'Order #' + r.code,
             prefill: prefill,
             theme: { color: '#1F4D3A' },
-            handler: function (resp) {
-              api('/api/checkout/verify', { method: 'POST', body: resp })
-                .then(function () { paid(r.code); })
-                .catch(function (e) { setPaying(false); toast(e.message); });
-            },
+            handler: function (resp) { verifyAndFinish(r, resp); },
             modal: { ondismiss: function () { setPaying(false); toast('Payment cancelled. Your order was not placed.'); } }
           };
           if (config) opts.config = config;
@@ -553,13 +703,7 @@
             toast('Payment failed: ' + ((resp && resp.error && resp.error.description) || 'please try again.'));
           });
           rz.open();
-        });
-      })
-      .catch(function (e) {
-        setPaying(false);
-        if (e.status === 401) { state.user = null; renderAccount(); refreshCart(); }
-        toast(e.message);
-      });
+    }).catch(function (e) { setPaying(false); toast(e.message); });
   }
 
   function paid(code) {
@@ -588,6 +732,7 @@
     }
     else if (a === 'cat') { state.cat = b.getAttribute('data-cat'); viewHome(); }
     else if (a === 'go-checkout') { location.hash = '#/checkout'; }
+    else if (a === 'choose-upi') { var nt = document.getElementById('note'); if (nt) state.note = nt.value; openUpiSheet(); }
     else if (a === 'login-orders') { state.redirect = '#/orders'; location.hash = '#/login'; }
     else if (a === 'edit-address') {
       var n2 = document.getElementById('note');
@@ -616,10 +761,14 @@
   // Picking a payment method on the checkout page
   app.addEventListener('change', function (e) {
     if (e.target.name !== 'paymethod') return;
+    var n = document.getElementById('note');
+    if (n) state.note = n.value;
     state.method = e.target.value;
-    app.querySelectorAll('.pm').forEach(function (l) { l.classList.toggle('on', l.querySelector('input').checked); });
-    var b = document.getElementById('payBtn');
-    if (b) b.textContent = payBtnLabel(totals().total);
+    var y = window.scrollY;
+    viewCheckout();
+    window.scrollTo(0, y);
+    // Choosing "Pay by any UPI App" opens the list of UPI apps.
+    if (UPI_IDS.indexOf(state.method) >= 0) openUpiSheet();
   });
 
   app.addEventListener('submit', function (e) {

@@ -181,7 +181,8 @@ function payMethods() {
     list.push({ id: 'gpay', label: 'Google Pay', sub: 'Opens GPay — order confirmed automatically' });
     list.push({ id: 'phonepe', label: 'PhonePe', sub: 'Opens PhonePe — order confirmed automatically' });
     list.push({ id: 'paytm', label: 'Paytm', sub: 'Opens Paytm — order confirmed automatically' });
-    list.push({ id: 'razorpay', label: 'Other UPI, cards & net banking', sub: 'Any UPI app, debit/credit card or bank' });
+    list.push({ id: 'upi', label: 'Other UPI app', sub: 'BHIM, bank apps and more' });
+    list.push({ id: 'razorpay', label: 'Credit / debit card & net banking', sub: 'Visa, Mastercard, RuPay, all banks' });
   } else if (UPI_ID) {
     list.push({ id: 'gpay', label: 'Google Pay', sub: 'Pay with the GPay app' });
     list.push({ id: 'phonepe', label: 'PhonePe', sub: 'Pay with the PhonePe app' });

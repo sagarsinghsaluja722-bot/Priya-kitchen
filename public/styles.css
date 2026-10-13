@@ -187,6 +187,29 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; }
   .co-stepper { grid-column: 1 / -1; justify-self: start; }
 }
 
+/* "Pay by any UPI App" row + app chip */
+.pm-upi { flex-direction: column; align-items: stretch; gap: 10px; cursor: default; }
+.pm-row { display: flex; align-items: center; gap: 14px; cursor: pointer; }
+.upi-mark { background: #fff !important; color: #1F4D3A; border: 1.5px solid #D8D1C2; font-style: italic; letter-spacing: -0.5px; }
+.upi-chip { display: flex; align-items: center; justify-content: space-between; min-height: 46px; padding: 0 14px 0 18px; border: 1.5px solid #CFC7B6; border-radius: 999px; background: #fff; font-size: 16px; font-weight: 500; color: var(--ink); margin-left: 34px; }
+.co-confirm { gap: 16px; }
+
+/* bottom sheet */
+.sheet-wrap { position: fixed; inset: 0; z-index: 60; }
+.sheet-backdrop { position: absolute; inset: 0; background: rgba(20, 20, 18, 0.55); opacity: 0; transition: opacity .2s; }
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; max-width: 640px; margin: 0 auto; background: #fff; border-radius: 20px 20px 0 0; padding: 20px 20px calc(20px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 12px; transform: translateY(100%); transition: transform .25s ease-out; max-height: 85vh; overflow-y: auto; }
+.sheet-wrap.open .sheet-backdrop { opacity: 1; }
+.sheet-wrap.open .sheet { transform: translateY(0); }
+.sheet h2 { font-family: var(--display); font-weight: 800; font-size: 20px; }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.sheet-x { width: 44px; height: 44px; border: 0; background: transparent; color: var(--ink); display: grid; place-items: center; border-radius: 50%; }
+.sheet-list { display: flex; flex-direction: column; }
+.sheet-item { display: flex; align-items: center; gap: 16px; min-height: 64px; padding: 8px 4px; border: 0; border-bottom: 1px dotted #D8D1C2; background: transparent; text-align: left; font-size: 17px; font-weight: 600; color: var(--ink); }
+.sheet-item:last-child { border-bottom: 0; }
+.sheet-name { flex-grow: 1; }
+.sheet-radio { width: 24px; height: 24px; border-radius: 50%; border: 2px solid #9A9488; flex-shrink: 0; }
+.sheet-item.on .sheet-radio { border: 7px solid var(--green); }
+
 /* footer */
 .footer { background: var(--green-dark); color: #E3EEE8; }
 .footer-in { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 26px; padding-top: 44px; padding-bottom: 44px; }
