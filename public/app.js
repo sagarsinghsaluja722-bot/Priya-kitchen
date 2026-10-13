@@ -411,28 +411,26 @@
       var o = r.order, u = r.upi;
       if (o.status !== 'pending_payment') { location.hash = '#/orders'; return; }
       var mobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
-      app.innerHTML = '<section class="page"><div class="narrow" style="max-width:520px"><div class="panel">' +
-        '<h1>Pay ' + rupees(u.amount) + '</h1>' +
-        '<p class="muted">Order <strong>#' + esc(o.code) + '</strong> · ' + o.items.map(function (l) { return l.qty + ' × ' + esc(l.name); }).join(', ') + '</p>' +
-        '<div class="notice notice-warn"><strong>Step 1:</strong> Pay exactly <strong>' + rupees(u.amount) + '</strong> to Priya Kitchen by UPI.</div>' +
-        (mobile ? (function () {
-          var names = { gpay: 'Google Pay', phonepe: 'PhonePe', paytm: 'Paytm' };
-          var appLink = u.apps && u.apps[appName];
-          return appLink
-            ? '<a href="' + esc(appLink) + '" class="btn btn-accent btn-block btn-lg">Open ' + names[appName] + ' to pay ' + rupees(u.amount) + '</a>' +
-              '<a href="' + esc(u.link) + '" class="btn btn-outline btn-block">Pay with another UPI app</a>'
-            : '<a href="' + esc(u.link) + '" class="btn btn-accent btn-block btn-lg">Open UPI app to pay ' + rupees(u.amount) + '</a>';
-        })() : '') +
-        '<div style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px 0">' +
-          '<div id="qr" style="background:#fff;padding:10px;border:1px solid var(--line);border-radius:12px"></div>' +
-          '<span class="muted" style="font-size:14px">' + (mobile ? 'Or scan this QR from another phone' : 'Scan with any UPI app') + '</span></div>' +
-        '<div class="deliver-box" style="flex-direction:row;align-items:center;justify-content:space-between;gap:10px"><span>UPI ID: <strong>' + esc(u.upiId) + '</strong></span><button type="button" class="btn-link" data-action="copy-upi" data-upi="' + esc(u.upiId) + '" style="min-height:36px">Copy</button></div>' +
-        '<div class="notice notice-warn" style="margin-top:6px"><strong>Step 2:</strong> After paying, open the payment in your UPI app and copy the <strong>UPI reference number</strong> (12 digits, also called UTR or UPI Ref No.).</div>' +
+      var appLink = (u.apps && u.apps[appName]) || u.link;
+      var appLabel = APP_NAME[appName] && appName !== 'upi' ? APP_NAME[appName] : 'your UPI app';
+      // Phone: the app has already been opened; this screen is what the customer comes back to.
+      // Computer: show a QR code to scan with a phone.
+      app.innerHTML = '<section class="page"><div class="narrow" style="max-width:520px"><div class="panel" style="align-items:stretch">' +
+        (mobile
+          ? '<div style="display:flex;align-items:center;gap:12px">' + upiIcon(appName || 'upi') + '<h1 style="font-size:26px">Pay ' + rupees(u.amount) + ' in ' + esc(appLabel) + '</h1></div>' +
+            '<p class="muted">' + esc(appLabel.charAt(0).toUpperCase() + appLabel.slice(1)) + ' opens with ' + rupees(u.amount) + ' already filled in. Choose your bank, enter your UPI PIN, then come back here.</p>' +
+            '<a href="' + esc(appLink) + '" class="btn btn-outline btn-block">' + esc(appLabel === 'your UPI app' ? 'Open UPI app' : 'Open ' + appLabel) + ' again</a>'
+          : '<h1>Pay ' + rupees(u.amount) + '</h1><p class="muted">Scan this QR code with GPay, PhonePe, Paytm or any UPI app. The amount is filled in for you.</p>' +
+            '<div style="display:flex;justify-content:center;padding:4px 0"><div id="qr" style="background:#fff;padding:10px;border:1px solid var(--line);border-radius:12px"></div></div>') +
+        '<p class="muted" style="font-size:14px">Order #' + esc(o.code) + ' · ' + o.items.map(function (l) { return l.qty + ' × ' + esc(l.name); }).join(', ') + '</p>' +
         '<form data-form="utr" data-id="' + o.id + '" style="display:flex;flex-direction:column;gap:12px" novalidate>' +
-          '<div class="field"><label for="utr">UPI reference number (UTR)</label><input id="utr" class="input" inputmode="numeric" autocomplete="off" maxlength="22" placeholder="e.g. 428517390164" required></div>' +
-          '<button type="submit" class="btn btn-primary btn-block btn-lg">I have paid — place my order</button></form>' +
-        '<p class="small">Priya Kitchen checks your payment and confirms your order. You can track it live under “Your orders”.</p>' +
+          '<button type="submit" class="btn btn-accent btn-block btn-lg">I\'ve paid ' + rupees(u.amount) + ' — place my order</button>' +
+          '<details class="utr-more"><summary>Add UPI reference number (optional)</summary>' +
+            '<div class="field" style="margin-top:8px"><label for="utr">UPI reference / UTR number</label><input id="utr" class="input" inputmode="numeric" autocomplete="off" maxlength="22" placeholder="12 digits, from your payment details"></div></details>' +
+        '</form>' +
+        '<p class="small">Paying to ' + esc(u.payee) + ' (' + esc(u.upiId) + '). Priya Kitchen confirms your payment, then your order is tracked live under “Your orders”.</p>' +
         '</div></div></section>';
+      if (mobile) return;
       loadQr().then(function () {
         var el = document.getElementById('qr');
         if (el && window.QRCode) new window.QRCode(el, { text: u.link, width: 200, height: 200, correctLevel: window.QRCode.CorrectLevel.M });
@@ -468,8 +466,9 @@
         '<a href="#/pay/' + o.id + '/' + esc(o.payMethod || 'upi') + '" class="btn btn-accent" style="align-self:flex-start">Complete payment</a></article>';
     }
     var cod = o.payMethod === 'cod';
-    var steps = o.utr
-      ? [['payment_submitted', 'Payment sent', 'UPI ref ' + o.utr + (o.status === 'payment_submitted' ? ' · waiting for Priya Kitchen to confirm' : '')], ['placed', 'Payment confirmed', 'Priya Kitchen received your payment']].concat(STEPS.slice(1))
+    var sentByUpi = o.utr || o.status === 'payment_submitted' || (o.history || []).some(function (h) { return h.status === 'payment_submitted'; });
+    var steps = sentByUpi
+      ? [['payment_submitted', 'Payment sent', (o.utr ? 'UPI ref ' + o.utr : 'Paid by UPI') + (o.status === 'payment_submitted' ? ' · waiting for Priya Kitchen to confirm' : '')], ['placed', 'Payment confirmed', 'Priya Kitchen received your payment']].concat(STEPS.slice(1))
       : cod ? [['placed', 'Order placed', 'Cash on delivery — keep ' + rupees(o.total) + ' ready']].concat(STEPS.slice(1))
       : STEPS;
     var idx = -1;
@@ -587,9 +586,9 @@
           saveCart();
           state.orders = null;
           location.hash = '#/pay/' + r.orderId + '/' + (r.method || 'upi');
-          // Open the chosen UPI app straight away on phones (the pay page keeps a button in case it doesn't open).
+          // Phones: jump straight into GPay / PhonePe / Paytm with the amount filled in.
           var appLink = r.upi.apps && r.upi.apps[r.method];
-          if (isMobile()) setTimeout(function () { window.location.href = appLink || r.upi.link; }, 150);
+          if (isMobile()) window.location.href = appLink || r.upi.link;
           return;
         }
         if (r.demoPayment) {
@@ -803,7 +802,7 @@
         .catch(function (err) { btn.disabled = false; toast(err.message); });
     } else if (f === 'utr') {
       var utr = document.getElementById('utr').value.replace(/\s/g, '');
-      if (!/^[A-Za-z0-9]{10,22}$/.test(utr)) { toast('Please enter the 12-digit UPI reference number from your payment app.'); return; }
+      if (utr && !/^[A-Za-z0-9]{10,22}$/.test(utr)) { toast('That UPI reference number doesn\'t look right — it is usually 12 digits. Or leave it empty.'); return; }
       btn.disabled = true;
       var oid = e.target.getAttribute('data-id');
       api('/api/orders/' + oid + '/upi-paid', { method: 'POST', body: { utr: utr } })

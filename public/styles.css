@@ -194,6 +194,8 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; }
 .upi-chip { display: flex; align-items: center; justify-content: space-between; min-height: 46px; padding: 0 14px 0 18px; border: 1.5px solid #CFC7B6; border-radius: 999px; background: #fff; font-size: 16px; font-weight: 500; color: var(--ink); margin-left: 34px; }
 .co-confirm { gap: 16px; }
 
+.utr-more summary { cursor: pointer; color: var(--green); font-weight: 600; font-size: 15px; min-height: 40px; display: flex; align-items: center; }
+
 /* bottom sheet */
 .sheet-wrap { position: fixed; inset: 0; z-index: 60; }
 .sheet-backdrop { position: absolute; inset: 0; background: rgba(20, 20, 18, 0.55); opacity: 0; transition: opacity .2s; }

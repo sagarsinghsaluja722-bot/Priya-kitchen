@@ -172,11 +172,16 @@ function upiInfo(row) {
   };
 }
 
+// Razorpay can only launch GPay/PhonePe/Paytm with LIVE keys (test mode never opens real UPI apps).
+const RZP_LIVE = rzp.configured() && !/^rzp_test_/.test(process.env.RAZORPAY_KEY_ID || '');
+// Without live Razorpay, GPay/PhonePe/Paytm open directly with the shop's UPI ID and the amount filled in.
+const DIRECT_UPI = !!UPI_ID && !RZP_LIVE;
+
 // Payment choices shown at checkout
 function payMethods() {
   const s = getSettings();
   const list = [];
-  if (rzp.configured()) {
+  if (!DIRECT_UPI && rzp.configured()) {
     // Razorpay: the payment sheet opens on the chosen app and confirms the payment automatically.
     list.push({ id: 'gpay', label: 'Google Pay', sub: 'Opens GPay — order confirmed automatically' });
     list.push({ id: 'phonepe', label: 'PhonePe', sub: 'Opens PhonePe — order confirmed automatically' });
@@ -187,7 +192,8 @@ function payMethods() {
     list.push({ id: 'gpay', label: 'Google Pay', sub: 'Pay with the GPay app' });
     list.push({ id: 'phonepe', label: 'PhonePe', sub: 'Pay with the PhonePe app' });
     list.push({ id: 'paytm', label: 'Paytm', sub: 'Pay with the Paytm app' });
-    list.push({ id: 'upi', label: 'Any UPI app / QR', sub: 'BHIM, bank apps, or scan a QR code' });
+    list.push({ id: 'upi', label: 'Other UPI app / QR', sub: 'BHIM, bank apps, or scan a QR code' });
+    if (rzp.configured()) list.push({ id: 'razorpay', label: 'Credit / debit card & net banking', sub: 'Visa, Mastercard, RuPay, all banks' });
   }
   if (s.cod_enabled === '1') list.push({ id: 'cod', label: 'Cash on delivery', sub: 'Pay in cash when your tiffin arrives' });
   if (!list.length && PAY_MODE === 'demo') list.push({ id: 'demo', label: 'Test payment', sub: 'Test mode — no money is taken' });
@@ -479,7 +485,7 @@ route('POST', '/api/checkout', async (req, res) => {
     return sendJson(res, 200, { orderId: id, code, total, cod: true });
   }
   if (method === 'demo') return sendJson(res, 200, { orderId: id, code, total, demoPayment: true });
-  if (!rzp.configured() && ['gpay', 'phonepe', 'paytm', 'upi'].includes(method)) return sendJson(res, 200, { orderId: id, code, total, method, upi: upiInfo(getOrder(id)) });
+  if (DIRECT_UPI && ['gpay', 'phonepe', 'paytm', 'upi'].includes(method)) return sendJson(res, 200, { orderId: id, code, total, method, upi: upiInfo(getOrder(id)) });
 
   try {
     const r = await rzp.createOrder(total * 100, code);
@@ -529,12 +535,13 @@ route('GET', '/api/orders/:id/upi', (req, res) => {
 route('POST', '/api/orders/:id/upi-paid', (req, res) => {
   const u = needUser(req);
   if (!UPI_ID) throw httpError(404, 'Not found.');
+  // The UPI reference number is optional — it just helps the kitchen match the payment.
   const utr = String(req.body.utr || '').replace(/\s/g, '').toUpperCase();
-  if (!/^[A-Z0-9]{10,22}$/.test(utr)) throw httpError(400, 'Please enter the 12-digit UPI reference number (UTR) from your payment app.');
+  if (utr && !/^[A-Z0-9]{10,22}$/.test(utr)) throw httpError(400, 'That UPI reference number doesn’t look right. It is usually 12 digits — or leave it empty.');
   const row = db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(int(req.params.id), u.id);
   if (!row) throw httpError(404, 'Order not found.');
   if (row.status !== 'pending_payment') return sendJson(res, 200, { order: publicOrder(row) });
-  const used = db.prepare("SELECT id FROM orders WHERE utr = ? AND id != ? AND status != 'cancelled'").get(utr, row.id);
+  const used = utr && db.prepare("SELECT id FROM orders WHERE utr = ? AND id != ? AND status != 'cancelled'").get(utr, row.id);
   if (used) throw httpError(400, 'This UPI reference number was already used for another order. Please check it.');
   const r = submitUpiTx(row.id, utr);
   if (r.changed) {
