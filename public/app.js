@@ -128,12 +128,12 @@
         '<p>Choose your tiffin, pay online, and track your order live — from our kitchen to your door.</p>' +
         '<div class="hero-actions"><a href="#menu" class="btn btn-accent btn-lg">Order a tiffin</a><a href="#/orders" class="btn btn-ghost-light btn-lg">Track my order</a></div></div>' +
         '<div class="hero-art"><div class="tile tile-a">Fresh every day</div><div class="tile tile-b">Packed with care</div>' +
-        '<div class="tile tile-c"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#1F4D3A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span><strong>Prepaid orders only.</strong> Pay by UPI (GPay, PhonePe, Paytm) — we start cooking once your payment is confirmed.</span></div></div>' +
+        '<div class="tile tile-c"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#1F4D3A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span><strong>Easy payment.</strong> ' + payNote() + '.</span></div></div>' +
       '</div></section>' +
       '<section class="band"><div class="wrap section"><h2>How it works</h2><div class="steps">' +
         step(1, 'Log in with your phone', 'Quick login with your number. First time? Just add your name and address once.') +
         step(2, 'Pick your tiffin', 'Add tiffins and extras to your cart.') +
-        step(3, 'Pay online', 'Pay by UPI. Your order reaches our kitchen on WhatsApp instantly.') +
+        step(3, 'Pay your way', payNote() + '. Your order reaches our kitchen on WhatsApp instantly.') +
         step(4, 'Track it live', 'Follow every step under “Your orders” until your tiffin arrives.') +
       '</div></div></section>' +
       '<section id="menu"><div class="wrap section"><div class="menu-layout">' +
@@ -159,24 +159,92 @@
       '<div class="grand"><span>Total</span><span>' + rupees(t.total) + '</span></div></div></div>';
     if (c.minOrder > 0 && t.subtotal < c.minOrder) h += '<div class="notice notice-warn">Minimum order is ' + rupees(c.minOrder) + '.</div>';
 
-    if (!state.user) {
-      return h + '<p class="muted" style="font-size:14px">Log in to place your order and track it.</p>' +
-        '<button type="button" class="btn btn-accent btn-block btn-lg" data-action="login-checkout">Log in to checkout</button>';
+    var disabled = !c.acceptingOrders || (c.minOrder > 0 && t.subtotal < c.minOrder);
+    return h + (state.user ? '' : '<p class="muted" style="font-size:14px">You\'ll log in with your mobile number on the next step.</p>') +
+      '<button type="button" class="btn btn-accent btn-block btn-lg" data-action="go-checkout"' + (disabled ? ' disabled' : '') + '>Proceed to checkout · ' + rupees(t.total) + '</button>' +
+      '<p class="small">' + payNote() + '</p>';
+  }
+
+  // Short line describing how customers can pay
+  function payNote() {
+    var ids = ((state.config && state.config.payMethods) || []).map(function (m) { return m.id; });
+    var parts = [];
+    if (ids.indexOf('gpay') >= 0) parts.push('GPay, PhonePe, Paytm or any UPI app');
+    else if (ids.indexOf('razorpay') >= 0) parts.push('UPI, cards or net banking');
+    if (ids.indexOf('cod') >= 0) parts.push('cash on delivery');
+    return parts.length ? 'Pay by ' + parts.join(' — or ') : 'Pay online';
+  }
+
+  // ---------- checkout: items + delivery + payment method ----------
+  var APP_BADGE = { gpay: ['G', '#1A73E8'], phonepe: ['Pe', '#5F259F'], paytm: ['P', '#00B9F1'], upi: ['UPI', '#1F4D3A'], razorpay: ['₹', '#1F4D3A'], cod: ['₹', '#2E7D32'], demo: ['T', '#6B4A00'] };
+
+  function chosenMethod() {
+    var list = (state.config && state.config.payMethods) || [];
+    var ids = list.map(function (m) { return m.id; });
+    if (ids.indexOf(state.method) < 0) state.method = ids[0] || '';
+    return state.method;
+  }
+
+  function payBtnLabel(total) {
+    var m = chosenMethod();
+    if (state.paying) return 'Please wait…';
+    if (m === 'cod') return 'Place order · ' + rupees(total) + ' (cash on delivery)';
+    if (m === 'gpay') return 'Pay ' + rupees(total) + ' with Google Pay';
+    if (m === 'phonepe') return 'Pay ' + rupees(total) + ' with PhonePe';
+    if (m === 'paytm') return 'Pay ' + rupees(total) + ' with Paytm';
+    if (m === 'demo') return 'Place test order · ' + rupees(total);
+    return 'Pay ' + rupees(total);
+  }
+
+  function viewCheckout() {
+    if (!state.user) { state.redirect = '#/checkout'; location.hash = '#/login'; return; }
+    if (!state.user.profileComplete) { state.redirect = '#/checkout'; state.login.step = 'profile'; location.hash = '#/login'; return; }
+    var t = totals();
+    var c = state.config || {};
+    if (!t.lines.length) {
+      app.innerHTML = '<section class="page"><div class="narrow"><div class="panel" style="align-items:flex-start"><h1>Checkout</h1><p class="muted">Your cart is empty.</p><a href="#/" class="btn btn-primary">Browse the menu</a></div></div></section>';
+      return;
     }
     var u = state.user;
-    if (!u.profileComplete) {
-      return h + '<button type="button" class="btn btn-accent btn-block btn-lg" data-action="complete-profile">Add your delivery details</button>';
-    }
+    var method = chosenMethod();
+    var items = '<div class="co-items">' + t.lines.map(function (l) {
+      return '<div class="co-item"><div class="co-item-name"><strong>' + esc(l.name) + '</strong><span class="muted">' + rupees(l.amount / l.qty) + ' each</span></div>' +
+        '<div class="stepper co-stepper"><button type="button" data-action="dec" data-id="' + l.id + '" aria-label="Remove one ' + esc(l.name) + '">−</button><span>' + l.qty + '</span><button type="button" data-action="inc" data-id="' + l.id + '" aria-label="Add one ' + esc(l.name) + '">+</button></div>' +
+        '<span class="co-item-amt">' + rupees(l.amount) + '</span></div>';
+    }).join('') + '</div>' +
+      '<div class="totals"><div><span class="muted">Subtotal</span><span>' + rupees(t.subtotal) + '</span></div>' +
+      '<div><span class="muted">Delivery</span><span>' + (t.fee ? rupees(t.fee) : 'Free') + '</span></div>' +
+      '<div class="grand"><span>Total to pay</span><span>' + rupees(t.total) + '</span></div></div>';
+
     var addr = state.editAddress
-      ? '<div class="field"><label for="addr">Delivery address</label><textarea id="addr" class="input" rows="3">' + esc(u.address) + '</textarea></div>'
-      : '<div class="deliver-box"><strong>Delivering to ' + esc(u.name) + '</strong><span class="muted">' + esc(u.address) + '</span><span class="muted">+91 ' + esc(u.phone) + '</span>' +
+      ? '<div class="field"><label for="addr">Delivery address</label><textarea id="addr" class="input" rows="3" maxlength="300">' + esc(u.address) + '</textarea></div>'
+      : '<div class="deliver-box"><strong>' + esc(u.name) + ' · +91 ' + esc(u.phone) + '</strong><span class="muted">' + esc(u.address) + '</span>' +
         '<button type="button" class="btn-link" style="align-self:flex-start;padding:0;min-height:32px" data-action="edit-address">Change address</button></div>';
-    var disabled = !c.acceptingOrders || (c.minOrder > 0 && t.subtotal < c.minOrder) || state.paying;
-    return h + addr +
-      '<div class="field"><label for="note">Note for the kitchen (optional)</label><input id="note" class="input" maxlength="200" placeholder="e.g. less spicy"></div>' +
-      '<button type="button" class="btn btn-accent btn-block btn-lg" data-action="pay"' + (disabled ? ' disabled' : '') + '>' + (state.paying ? 'Please wait…' : (c.payMode === 'upi' ? 'Continue to pay ' + rupees(t.total) : 'Pay ' + rupees(t.total) + ' &amp; place order')) + '</button>' +
-      '<p class="small">' + (c.payMode === 'upi' ? 'Prepaid only · Pay by UPI — GPay, PhonePe, Paytm or any UPI app' : 'Prepaid only · UPI, cards &amp; net banking') + '</p>' +
-      (c.demoPayment ? '<div class="notice notice-warn">Test mode: payment is simulated. No money is charged.</div>' : '');
+
+    var methods = (c.payMethods || []).map(function (m) {
+      var b = APP_BADGE[m.id] || ['₹', '#1F4D3A'];
+      return '<label class="pm' + (m.id === method ? ' on' : '') + '"><input type="radio" name="paymethod" value="' + esc(m.id) + '"' + (m.id === method ? ' checked' : '') + '>' +
+        '<span class="pm-badge" style="background:' + b[1] + '" aria-hidden="true">' + b[0] + '</span>' +
+        '<span class="pm-text"><strong>' + esc(m.label) + '</strong><span class="muted">' + esc(m.sub) + '</span></span></label>';
+    }).join('');
+
+    var blocked = !c.acceptingOrders ? 'We\'re not taking orders right now. Please check back soon.'
+      : (c.minOrder > 0 && t.subtotal < c.minOrder) ? 'Minimum order is ' + rupees(c.minOrder) + '.' : '';
+
+    app.innerHTML = '<section class="page"><div class="medium" style="max-width:640px">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap"><h1>Checkout</h1><a href="#/" class="btn-link">+ Add more items</a></div>' +
+      '<div class="panel"><h2 class="co-h">Your order</h2>' + items + '</div>' +
+      '<div class="panel"><h2 class="co-h">Delivery details</h2>' + addr +
+        '<div class="field"><label for="note">Note for the kitchen (optional)</label><input id="note" class="input" maxlength="200" placeholder="e.g. less spicy, ring the bell" value="' + esc(state.note || '') + '"></div></div>' +
+      '<div class="panel"><h2 class="co-h" id="pm-h">How would you like to pay?</h2><div class="pm-list" role="radiogroup" aria-labelledby="pm-h">' + methods + '</div></div>' +
+      (blocked ? '<div class="notice notice-warn">' + blocked + '</div>' : '') +
+      '<button type="button" id="payBtn" class="btn btn-accent btn-block btn-lg" data-action="pay"' + (blocked || state.paying ? ' disabled' : '') + '>' + payBtnLabel(t.total) + '</button>' +
+      (method === 'demo' ? '<div class="notice notice-warn">Test mode: no money is taken.</div>' : '') +
+      '</div></section>';
+  }
+
+  function rerender() {
+    if (currentRoute() === 'checkout') viewCheckout(); else viewHome();
   }
 
   function refreshCart() {
@@ -228,6 +296,16 @@
     if (first) first.focus();
   }
 
+  function viewCodPlaced(code) {
+    var total = state.lastCod && state.lastCod.code === code ? state.lastCod.total : null;
+    app.innerHTML = '<section class="page"><div class="narrow" style="max-width:540px"><div class="panel" style="align-items:flex-start">' +
+      '<span class="tick">' + ICON_CHECK + '</span><h1>Order placed!</h1>' +
+      '<p>Your order <strong>#' + esc(code) + '</strong> has been sent to Priya Kitchen.</p>' +
+      '<div class="notice notice-warn"><strong>Cash on delivery:</strong> please keep ' + (total ? '<strong>' + rupees(total) + '</strong>' : 'the amount') + ' ready when your tiffin arrives.</div>' +
+      '<div class="row-actions"><a href="#/orders" class="btn btn-primary">Track your order</a><a href="#/" class="btn btn-outline">Back to menu</a></div>' +
+      '</div></div></section>';
+  }
+
   function viewSuccess(code) {
     app.innerHTML = '<section class="page"><div class="narrow" style="max-width:540px"><div class="panel" style="align-items:flex-start">' +
       '<span class="tick">' + ICON_CHECK + '</span><h1>Payment successful</h1>' +
@@ -249,7 +327,7 @@
     });
   }
 
-  function viewPay(id) {
+  function viewPay(id, appName) {
     if (!state.user) { state.redirect = '#/pay/' + id; location.hash = '#/login'; return; }
     app.innerHTML = '<section class="page"><div class="narrow"><div class="spinner" aria-label="Loading"></div></div></section>';
     api('/api/orders/' + encodeURIComponent(id) + '/upi').then(function (r) {
@@ -260,7 +338,14 @@
         '<h1>Pay ' + rupees(u.amount) + '</h1>' +
         '<p class="muted">Order <strong>#' + esc(o.code) + '</strong> · ' + o.items.map(function (l) { return l.qty + ' × ' + esc(l.name); }).join(', ') + '</p>' +
         '<div class="notice notice-warn"><strong>Step 1:</strong> Pay exactly <strong>' + rupees(u.amount) + '</strong> to Priya Kitchen by UPI.</div>' +
-        (mobile ? '<a href="' + esc(u.link) + '" class="btn btn-accent btn-block btn-lg">Pay with GPay / PhonePe / Paytm</a>' : '') +
+        (mobile ? (function () {
+          var names = { gpay: 'Google Pay', phonepe: 'PhonePe', paytm: 'Paytm' };
+          var appLink = u.apps && u.apps[appName];
+          return appLink
+            ? '<a href="' + esc(appLink) + '" class="btn btn-accent btn-block btn-lg">Open ' + names[appName] + ' to pay ' + rupees(u.amount) + '</a>' +
+              '<a href="' + esc(u.link) + '" class="btn btn-outline btn-block">Pay with another UPI app</a>'
+            : '<a href="' + esc(u.link) + '" class="btn btn-accent btn-block btn-lg">Open UPI app to pay ' + rupees(u.amount) + '</a>';
+        })() : '') +
         '<div style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px 0">' +
           '<div id="qr" style="background:#fff;padding:10px;border:1px solid var(--line);border-radius:12px"></div>' +
           '<span class="muted" style="font-size:14px">' + (mobile ? 'Or scan this QR from another phone' : 'Scan with any UPI app') + '</span></div>' +
@@ -303,21 +388,23 @@
       return '<article class="order"><div class="order-head"><div><div class="order-code">Order #' + esc(o.code) + '</div><div class="muted" style="font-size:14px">' + when(o.createdAt) + ' · ' + rupees(o.total) + '</div></div><span class="badge">Payment pending</span></div>' +
         '<p style="color:var(--ink-2)">' + o.items.map(function (l) { return l.qty + ' × ' + esc(l.name); }).join(', ') + '</p>' +
         '<div class="notice notice-warn">This order is not placed yet — payment is not done.</div>' +
-        '<a href="#/pay/' + o.id + '" class="btn btn-accent" style="align-self:flex-start">Complete payment</a></article>';
+        '<a href="#/pay/' + o.id + '/' + esc(o.payMethod || 'upi') + '" class="btn btn-accent" style="align-self:flex-start">Complete payment</a></article>';
     }
+    var cod = o.payMethod === 'cod';
     var steps = o.utr
       ? [['payment_submitted', 'Payment sent', 'UPI ref ' + o.utr + (o.status === 'payment_submitted' ? ' · waiting for Priya Kitchen to confirm' : '')], ['placed', 'Payment confirmed', 'Priya Kitchen received your payment']].concat(STEPS.slice(1))
+      : cod ? [['placed', 'Order placed', 'Cash on delivery — keep ' + rupees(o.total) + ' ready']].concat(STEPS.slice(1))
       : STEPS;
     var idx = -1;
     steps.forEach(function (s, i) { if (s[0] === o.status) idx = i; });
     var times = {};
     (o.history || []).forEach(function (h) { times[h.status] = h.at; });
     var badgeClass = o.status === 'delivered' ? 'badge done' : o.status === 'cancelled' ? 'badge cancel' : 'badge';
-    var label = statusLabel(o.status);
+    var label = cod && o.status === 'placed' ? 'Order placed' : statusLabel(o.status);
     var items = o.items.map(function (l) { return l.qty + ' × ' + esc(l.name); }).join(', ');
     var track;
     if (o.status === 'cancelled') {
-      track = '<div class="notice notice-err">This order was cancelled. If you paid, Priya Kitchen will return your money. For help, message us on WhatsApp.</div>';
+      track = '<div class="notice notice-err">This order was cancelled.' + (cod ? '' : ' If you paid, Priya Kitchen will return your money.') + ' For help, message us on WhatsApp.</div>';
     } else {
       track = '<div class="timeline">' + steps.map(function (s, i) {
         var cls = 'tl' + (i <= idx ? ' reached' : '') + (i < idx ? ' passed' : '') + (i === idx && o.status !== 'delivered' ? ' current' : '');
@@ -325,7 +412,7 @@
         return '<div class="' + cls + '"><div class="tl-rail"><span class="dot"></span><span class="rail"></span></div><div class="tl-text"><span class="tl-title">' + s[1] + '</span><span class="tl-sub">' + esc(sub) + '</span></div></div>';
       }).join('') + '</div>';
     }
-    return '<article class="order"><div class="order-head"><div><div class="order-code">Order #' + esc(o.code) + '</div><div class="muted" style="font-size:14px">' + when(o.paidAt || o.createdAt) + ' · ' + rupees(o.total) + (o.status === 'payment_submitted' ? ' · payment being checked' : ' paid') + '</div></div><span class="' + badgeClass + '">' + esc(label) + '</span></div>' +
+    return '<article class="order"><div class="order-head"><div><div class="order-code">Order #' + esc(o.code) + '</div><div class="muted" style="font-size:14px">' + when(o.paidAt || o.createdAt) + ' · ' + rupees(o.total) + (cod ? (o.status === 'delivered' ? ' · paid in cash' : ' · cash on delivery') : o.status === 'payment_submitted' ? ' · payment being checked' : ' paid') + '</div></div><span class="' + badgeClass + '">' + esc(label) + '</span></div>' +
       '<p style="color:var(--ink-2)">' + items + '</p>' + track + '</article>';
   }
 
@@ -386,8 +473,11 @@
 
   function setPaying(on) {
     state.paying = on;
-    refreshCart();
+    var b = document.getElementById('payBtn');
+    if (b) { b.disabled = on; b.textContent = payBtnLabel(totals().total); }
   }
+
+  function isMobile() { return /Android|iPhone|iPad/i.test(navigator.userAgent); }
 
   function pay() {
     var t = totals();
@@ -397,17 +487,32 @@
     var address = addrEl ? addrEl.value.trim() : state.user.address;
     if (address.length < 10) { toast('Please enter your full delivery address.'); return; }
     var note = noteEl ? noteEl.value.trim() : '';
+    var method = chosenMethod();
+    if (!method) { toast('Please choose how you want to pay.'); return; }
     setPaying(true);
-    api('/api/checkout', { method: 'POST', body: { items: t.lines.map(function (l) { return { id: l.id, qty: l.qty }; }), address: address, note: note } })
+    api('/api/checkout', { method: 'POST', body: { items: t.lines.map(function (l) { return { id: l.id, qty: l.qty }; }), address: address, note: note, method: method } })
       .then(function (r) {
         state.user.address = address;
         state.editAddress = false;
+        state.note = '';
+        if (r.cod) {
+          state.paying = false;
+          state.cart = {};
+          saveCart();
+          state.orders = null;
+          state.lastCod = { code: r.code, total: r.total };
+          location.hash = '#/placed/' + r.code;
+          return;
+        }
         if (r.upi) {
           state.paying = false;
           state.cart = {};
           saveCart();
           state.orders = null;
-          location.hash = '#/pay/' + r.orderId;
+          location.hash = '#/pay/' + r.orderId + '/' + (r.method || 'upi');
+          // Open the chosen UPI app straight away on phones (the pay page keeps a button in case it doesn't open).
+          var appLink = r.upi.apps && r.upi.apps[r.method];
+          if (isMobile()) setTimeout(function () { window.location.href = appLink || r.upi.link; }, 150);
           return;
         }
         if (r.demoPayment) {
@@ -457,13 +562,25 @@
     if (!b) return;
     var a = b.getAttribute('data-action');
     var id = Number(b.getAttribute('data-id'));
-    if (a === 'inc') { state.cart[id] = Math.min(50, (state.cart[id] || 0) + 1); saveCart(); viewHome(); }
-    else if (a === 'dec') { state.cart[id] = (state.cart[id] || 0) - 1; if (state.cart[id] <= 0) delete state.cart[id]; saveCart(); viewHome(); }
+    if (a === 'inc' || a === 'dec') {
+      var nEl = document.getElementById('note');
+      if (nEl) state.note = nEl.value;
+      if (a === 'inc') state.cart[id] = Math.min(50, (state.cart[id] || 0) + 1);
+      else { state.cart[id] = (state.cart[id] || 0) - 1; if (state.cart[id] <= 0) delete state.cart[id]; }
+      saveCart();
+      var y = window.scrollY;
+      rerender();
+      window.scrollTo(0, y);
+    }
     else if (a === 'cat') { state.cat = b.getAttribute('data-cat'); viewHome(); }
-    else if (a === 'login-checkout') { state.redirect = '#/cart'; location.hash = '#/login'; }
+    else if (a === 'go-checkout') { location.hash = '#/checkout'; }
     else if (a === 'login-orders') { state.redirect = '#/orders'; location.hash = '#/login'; }
-    else if (a === 'complete-profile') { state.redirect = '#/cart'; state.login.step = 'profile'; location.hash = '#/login'; }
-    else if (a === 'edit-address') { state.editAddress = true; refreshCart(); var ta = document.getElementById('addr'); if (ta) ta.focus(); }
+    else if (a === 'edit-address') {
+      var n2 = document.getElementById('note');
+      if (n2) state.note = n2.value;
+      state.editAddress = true; viewCheckout();
+      var ta = document.getElementById('addr'); if (ta) ta.focus();
+    }
     else if (a === 'pay') pay();
     else if (a === 'change-phone') { state.login = { step: 'phone', phone: state.login.phone, demoOtp: '' }; viewLogin(); }
     else if (a === 'resend') sendOtp(state.login.phone);
@@ -480,6 +597,15 @@
         toast('You have been logged out.');
       });
     }
+  });
+
+  // Picking a payment method on the checkout page
+  app.addEventListener('change', function (e) {
+    if (e.target.name !== 'paymethod') return;
+    state.method = e.target.value;
+    app.querySelectorAll('.pm').forEach(function (l) { l.classList.toggle('on', l.querySelector('input').checked); });
+    var b = document.getElementById('payBtn');
+    if (b) b.textContent = payBtnLabel(totals().total);
   });
 
   app.addEventListener('submit', function (e) {
@@ -578,7 +704,9 @@
       viewLogin();
     } else if (r === 'orders') viewOrders();
     else if (r === 'success') viewSuccess(parts[1] || '');
-    else if (r === 'pay') viewPay(parts[1] || '');
+    else if (r === 'checkout') viewCheckout();
+    else if (r === 'placed') viewCodPlaced(parts[1] || '');
+    else if (r === 'pay') viewPay(parts[1] || '', parts[2] || '');
     else if (r === 'submitted') viewSubmitted(parts[1] || '');
     else {
       viewHome();
@@ -613,6 +741,8 @@
       saveCart();
       renderAccount();
       if (state.user && !state.user.profileComplete) state.login.step = 'profile';
+      var pf = document.getElementById('payFoot');
+      if (pf) pf.textContent = payNote() + '.';
       connectStream();
       route();
     })

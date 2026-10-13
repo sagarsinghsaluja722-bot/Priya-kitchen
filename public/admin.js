@@ -6,7 +6,7 @@
   var state = { tab: 'orders', scope: 'active', orders: [], today: { count: 0, revenue: 0 }, menu: [], settings: null, fresh: {}, stream: null, info: null };
 
   var FLOW = ['placed', 'accepted', 'preparing', 'out_for_delivery', 'delivered'];
-  var LABEL = { payment_submitted: 'Check payment', placed: 'New — paid', accepted: 'Accepted', preparing: 'Preparing', out_for_delivery: 'Out for delivery', delivered: 'Delivered', cancelled: 'Cancelled' };
+  var LABEL = { payment_submitted: 'Check payment', placed: 'New order', accepted: 'Accepted', preparing: 'Preparing', out_for_delivery: 'Out for delivery', delivered: 'Delivered', cancelled: 'Cancelled' };
   var NEXT = { payment_submitted: ['accepted', 'Payment received — accept order'], placed: ['accepted', 'Accept order'], accepted: ['preparing', 'Start preparing'], preparing: ['out_for_delivery', 'Out for delivery'], out_for_delivery: ['delivered', 'Mark delivered'] };
 
   function esc(s) {
@@ -108,13 +108,17 @@
       var btns = '';
       if (next) btns += '<button type="button" class="btn btn-primary" data-status="' + next[0] + '" data-id="' + o.id + '">' + next[1] + '</button>';
       var checking = o.status === 'payment_submitted';
+      var cod = o.payMethod === 'cod';
+      var methodName = { cod: 'Cash on delivery', gpay: 'Google Pay', phonepe: 'PhonePe', paytm: 'Paytm', upi: 'UPI', razorpay: 'Online (Razorpay)', demo: 'Test' }[o.payMethod] || 'Online';
       if (o.status !== 'cancelled' && o.status !== 'delivered') btns += '<button type="button" class="btn btn-danger" data-status="cancelled" data-id="' + o.id + '">' + (checking ? 'Payment not received' : 'Cancel') + '</button>';
       return '<article class="admin-order' + (state.fresh[o.id] ? ' fresh' : '') + '">' +
         (checking ? '<div class="notice notice-warn">Check your UPI / bank app for <strong>' + rupees(o.total) + '</strong> with reference <strong>' + esc(o.utr) + '</strong>. If it arrived, tap “Payment received”.</div>' : '') +
-        '<div class="order-head"><div><div class="order-code">#' + esc(o.code) + ' · ' + rupees(o.total) + ' <span class="muted" style="font-weight:500;font-size:14px">' + (checking ? 'to check' : 'paid') + '</span></div><div class="muted" style="font-size:14px">' + when(o.paidAt || o.createdAt) + '</div></div><span class="' + badge + '">' + esc(LABEL[o.status] || o.status) + '</span></div>' +
+        (cod && o.status !== 'delivered' && o.status !== 'cancelled' ? '<div class="notice notice-warn"><strong>Cash on delivery</strong> — collect <strong>' + rupees(o.total) + '</strong> when you deliver.</div>' : '') +
+        '<div class="order-head"><div><div class="order-code">#' + esc(o.code) + ' · ' + rupees(o.total) + ' <span class="muted" style="font-weight:500;font-size:14px">' + (checking ? 'to check' : cod ? (o.status === 'delivered' ? 'cash collected' : 'cash on delivery') : 'paid') + '</span></div><div class="muted" style="font-size:14px">' + when(o.paidAt || o.createdAt) + '</div></div><span class="' + badge + '">' + esc(LABEL[o.status] || o.status) + '</span></div>' +
         '<dl><dt>Customer</dt><dd>' + esc(o.name) + ' · <a href="tel:+91' + esc(o.phone) + '">+91 ' + esc(o.phone) + '</a> · <a href="https://wa.me/91' + esc(o.phone) + '" target="_blank" rel="noopener">WhatsApp</a></dd>' +
         '<dt>Items</dt><dd>' + o.items.map(function (l) { return esc(l.qty + ' × ' + l.name); }).join('<br>') + '</dd>' +
         '<dt>Address</dt><dd>' + esc(o.address) + '</dd>' +
+        '<dt>Payment</dt><dd>' + esc(methodName) + '</dd>' +
         (o.utr ? '<dt>UPI ref</dt><dd>' + esc(o.utr) + '</dd>' : '') +
         (o.note ? '<dt>Note</dt><dd>' + esc(o.note) + '</dd>' : '') + '</dl>' +
         (btns ? '<div class="status-btns">' + btns + '</div>' : '') + '</article>';
@@ -144,6 +148,7 @@
     var s = state.settings || {};
     return '<form id="settingsForm" class="panel">' +
       '<label class="switch"><input type="checkbox" name="acceptingOrders"' + (s.acceptingOrders ? ' checked' : '') + '> Taking orders now (untick to pause the website)</label>' +
+      '<label class="switch"><input type="checkbox" name="codEnabled"' + (s.codEnabled ? ' checked' : '') + '> Allow cash on delivery</label>' +
       '<div class="field"><label for="fee">Delivery charge (₹)</label><input id="fee" name="deliveryFee" class="input" type="number" min="0" step="1" value="' + esc(s.deliveryFee) + '"></div>' +
       '<div class="field"><label for="free">Free delivery above (₹, 0 = never)</label><input id="free" name="freeDeliveryAbove" class="input" type="number" min="0" step="1" value="' + esc(s.freeDeliveryAbove) + '"></div>' +
       '<div class="field"><label for="min">Minimum order (₹, 0 = none)</label><input id="min" name="minOrder" class="input" type="number" min="0" step="1" value="' + esc(s.minOrder) + '"></div>' +
@@ -222,6 +227,7 @@
       e.preventDefault();
       api('/api/admin/settings', { method: 'PUT', body: {
         acceptingOrders: f.acceptingOrders.checked,
+        codEnabled: f.codEnabled.checked,
         deliveryFee: Number(f.deliveryFee.value || 0),
         freeDeliveryAbove: Number(f.freeDeliveryAbove.value || 0),
         minOrder: Number(f.minOrder.value || 0)

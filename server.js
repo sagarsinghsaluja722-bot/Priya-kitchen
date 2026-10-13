@@ -89,6 +89,7 @@ function publicOrder(o) {
     address: o.address,
     note: o.note,
     status: o.status,
+    payMethod: o.pay_method || '',
     utr: o.utr || '',
     history: JSON.parse(o.history || '[]'),
     createdAt: o.created_at,
@@ -163,8 +164,28 @@ function upiInfo(row) {
   const amount = Number(row.total).toFixed(2);
   const note = 'Order ' + orderCode(row.id);
   // UPI apps expect the @ in the UPI ID unencoded (UPI_ID is validated at start-up).
-  const link = `upi://pay?pa=${UPI_ID}&pn=${encodeURIComponent(UPI_NAME)}&am=${amount}&cu=INR&tn=${encodeURIComponent(note)}`;
-  return { link, upiId: UPI_ID, payee: UPI_NAME, amount: row.total, note };
+  const q = `pa=${UPI_ID}&pn=${encodeURIComponent(UPI_NAME)}&am=${amount}&cu=INR&tn=${encodeURIComponent(note)}`;
+  return {
+    link: 'upi://pay?' + q,
+    apps: { gpay: 'tez://upi/pay?' + q, phonepe: 'phonepe://pay?' + q, paytm: 'paytmmp://pay?' + q },
+    upiId: UPI_ID, payee: UPI_NAME, amount: row.total, note
+  };
+}
+
+// Payment choices shown at checkout
+function payMethods() {
+  const s = getSettings();
+  const list = [];
+  if (UPI_ID) {
+    list.push({ id: 'gpay', label: 'Google Pay', sub: 'Pay with the GPay app' });
+    list.push({ id: 'phonepe', label: 'PhonePe', sub: 'Pay with the PhonePe app' });
+    list.push({ id: 'paytm', label: 'Paytm', sub: 'Pay with the Paytm app' });
+    list.push({ id: 'upi', label: 'Any UPI app / QR', sub: 'BHIM, bank apps, or scan a QR code' });
+  }
+  if (rzp.configured()) list.push({ id: 'razorpay', label: 'UPI, cards & net banking', sub: 'Secure online payment' });
+  if (s.cod_enabled === '1') list.push({ id: 'cod', label: 'Cash on delivery', sub: 'Pay in cash when your tiffin arrives' });
+  if (!list.length && PAY_MODE === 'demo') list.push({ id: 'demo', label: 'Test payment', sub: 'Test mode — no money is taken' });
+  return list;
 }
 
 // Customer says they paid by UPI and gives the reference (UTR) number → owner checks and confirms.
@@ -300,6 +321,7 @@ route('GET', '/api/config', (req, res) => {
     demo: DEMO,
     demoPayment: PAY_MODE === 'demo',
     payMode: PAY_MODE,
+    payMethods: payMethods(),
     authMode: AUTH_MODE,
     upiId: UPI_ID,
     acceptingOrders: s.accepting_orders === '1',
@@ -406,6 +428,9 @@ route('POST', '/api/checkout', async (req, res) => {
   const address = clean(req.body.address || u.address, 300);
   if (address.length < 10) throw httpError(400, 'Please enter your full delivery address.');
   const note = clean(req.body.note, 200);
+  const methods = payMethods().map((m) => m.id);
+  const method = String(req.body.method || methods[0] || '');
+  if (!methods.includes(method)) throw httpError(400, 'Please choose a payment method.');
 
   const wanted = new Map();
   for (const it of (Array.isArray(req.body.items) ? req.body.items : []).slice(0, 40)) {
@@ -432,14 +457,23 @@ route('POST', '/api/checkout', async (req, res) => {
   if (address !== u.address) db.prepare('UPDATE users SET address = ? WHERE id = ?').run(address, u.id);
 
   const now = iso();
-  const info = db.prepare(`INSERT INTO orders (user_id, items, subtotal, delivery_fee, total, name, phone, address, note, status, created_at, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_payment', ?, ?)`)
-    .run(u.id, JSON.stringify(lines), subtotal, fee, total, u.name, u.phone, address, note, now, now);
+  const isCod = method === 'cod';
+  const info = db.prepare(`INSERT INTO orders (user_id, items, subtotal, delivery_fee, total, name, phone, address, note, status, history, pay_method, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(u.id, JSON.stringify(lines), subtotal, fee, total, u.name, u.phone, address, note,
+      isCod ? 'placed' : 'pending_payment', isCod ? JSON.stringify([{ status: 'placed', at: now }]) : '[]', method, now, now);
   const id = Number(info.lastInsertRowid);
   const code = orderCode(id);
 
-  if (PAY_MODE === 'demo') return sendJson(res, 200, { orderId: id, code, total, demoPayment: true });
-  if (PAY_MODE === 'upi') return sendJson(res, 200, { orderId: id, code, total, upi: upiInfo(getOrder(id)) });
+  // Cash on delivery: the order is placed right away; the kitchen collects cash at the door.
+  if (isCod) {
+    const row = getOrder(id);
+    emitOrder(row, true);
+    alertOwner(row);
+    return sendJson(res, 200, { orderId: id, code, total, cod: true });
+  }
+  if (method === 'demo') return sendJson(res, 200, { orderId: id, code, total, demoPayment: true });
+  if (['gpay', 'phonepe', 'paytm', 'upi'].includes(method)) return sendJson(res, 200, { orderId: id, code, total, method, upi: upiInfo(getOrder(id)) });
 
   try {
     const r = await rzp.createOrder(total * 100, code);
@@ -470,7 +504,7 @@ route('POST', '/api/checkout/verify', (req, res) => {
 // Testing only: pretend the payment went through (works only with DEMO_MODE=true and no Razorpay keys).
 route('POST', '/api/checkout/demo-pay', (req, res) => {
   const u = needUser(req);
-  if (!(DEMO && !rzp.configured())) throw httpError(404, 'Not found.');
+  if (PAY_MODE !== 'demo') throw httpError(404, 'Not found.');
   const row = db.prepare("SELECT * FROM orders WHERE id = ? AND user_id = ? AND status = 'pending_payment'").get(int(req.body.orderId), u.id);
   if (!row) throw httpError(404, 'Order not found.');
   sendJson(res, 200, { order: publicOrder(markPaid(Number(row.id), 'demo')) });
@@ -479,7 +513,7 @@ route('POST', '/api/checkout/demo-pay', (req, res) => {
 // Direct UPI: details to pay one of your own unpaid orders
 route('GET', '/api/orders/:id/upi', (req, res) => {
   const u = needUser(req);
-  if (PAY_MODE !== 'upi') throw httpError(404, 'Not found.');
+  if (!UPI_ID) throw httpError(404, 'Not found.');
   const row = db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(int(req.params.id), u.id);
   if (!row) throw httpError(404, 'Order not found.');
   sendJson(res, 200, { order: publicOrder(row), upi: upiInfo(row) });
@@ -488,7 +522,7 @@ route('GET', '/api/orders/:id/upi', (req, res) => {
 // Direct UPI: customer submits the UPI reference number after paying
 route('POST', '/api/orders/:id/upi-paid', (req, res) => {
   const u = needUser(req);
-  if (PAY_MODE !== 'upi') throw httpError(404, 'Not found.');
+  if (!UPI_ID) throw httpError(404, 'Not found.');
   const utr = String(req.body.utr || '').replace(/\s/g, '').toUpperCase();
   if (!/^[A-Z0-9]{10,22}$/.test(utr)) throw httpError(400, 'Please enter the 12-digit UPI reference number (UTR) from your payment app.');
   const row = db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(int(req.params.id), u.id);
@@ -507,8 +541,8 @@ route('POST', '/api/orders/:id/upi-paid', (req, res) => {
 route('GET', '/api/orders', (req, res) => {
   const u = needUser(req);
   const recent = new Date(Date.now() - 3 * 3600e3).toISOString();
-  const rows = db.prepare(`SELECT * FROM orders WHERE user_id = ? AND (status IN (${qs(VISIBLE)}) OR (status = 'pending_payment' AND ? = 'upi' AND created_at > ?)) ORDER BY id DESC LIMIT 50`)
-    .all(u.id, ...VISIBLE, PAY_MODE, recent);
+  const rows = db.prepare(`SELECT * FROM orders WHERE user_id = ? AND (status IN (${qs(VISIBLE)}) OR (status = 'pending_payment' AND pay_method IN ('gpay','phonepe','paytm','upi') AND created_at > ?)) ORDER BY id DESC LIMIT 50`)
+    .all(u.id, ...VISIBLE, recent);
   sendJson(res, 200, { orders: rows.map(publicOrder) });
 });
 
@@ -566,8 +600,10 @@ route('POST', '/api/admin/orders/:id/status', (req, res) => {
   const history = JSON.parse(row.history || '[]');
   const now = iso();
   history.push({ status, at: now });
-  // Confirming a UPI payment marks the order as paid.
-  const paidAt = row.status === 'payment_submitted' && status !== 'cancelled' ? now : row.paid_at;
+  // Confirming a UPI payment marks the order as paid; a cash-on-delivery order is paid when delivered.
+  let paidAt = row.paid_at;
+  if (row.status === 'payment_submitted' && status !== 'cancelled') paidAt = now;
+  if (row.pay_method === 'cod' && status === 'delivered' && !paidAt) paidAt = now;
   db.prepare('UPDATE orders SET status = ?, history = ?, updated_at = ?, paid_at = ? WHERE id = ?').run(status, JSON.stringify(history), now, paidAt, row.id);
   const updated = getOrder(row.id);
   emitOrder(updated, false);
@@ -627,7 +663,7 @@ route('POST', '/api/admin/reset-pin', (req, res) => {
 route('GET', '/api/admin/settings', (req, res) => {
   needAdmin(req);
   const s = getSettings();
-  sendJson(res, 200, { acceptingOrders: s.accepting_orders === '1', deliveryFee: int(s.delivery_fee), freeDeliveryAbove: int(s.free_delivery_above), minOrder: int(s.min_order) });
+  sendJson(res, 200, { acceptingOrders: s.accepting_orders === '1', codEnabled: s.cod_enabled === '1', deliveryFee: int(s.delivery_fee), freeDeliveryAbove: int(s.free_delivery_above), minOrder: int(s.min_order) });
 });
 
 route('PUT', '/api/admin/settings', (req, res) => {
@@ -635,6 +671,7 @@ route('PUT', '/api/admin/settings', (req, res) => {
   const b = req.body;
   const updates = [];
   if (b.acceptingOrders !== undefined) updates.push(['accepting_orders', b.acceptingOrders ? '1' : '0']);
+  if (b.codEnabled !== undefined) updates.push(['cod_enabled', b.codEnabled ? '1' : '0']);
   for (const [k, key] of [['deliveryFee', 'delivery_fee'], ['freeDeliveryAbove', 'free_delivery_above'], ['minOrder', 'min_order']]) {
     if (b[k] !== undefined) {
       const v = int(b[k], -1);
