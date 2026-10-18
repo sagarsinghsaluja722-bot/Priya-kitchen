@@ -600,8 +600,10 @@
           return api('/api/checkout/demo-pay', { method: 'POST', body: { orderId: r.orderId } }).then(function () { paid(r.code); });
         }
         return loadRazorpay().then(function () {
-          // Android: open the chosen UPI app directly with the amount filled in.
-          if (r.method !== 'razorpay' && r.method !== 'upi' && /Android/i.test(navigator.userAgent) && openUpiAppDirect(r)) return;
+          // Live keys on Android: open the chosen UPI app directly with the amount filled in.
+          // (Razorpay test keys never open real UPI apps, so test mode uses Razorpay's test screen.)
+          var live = !/^rzp_test_/.test(r.razorpay.keyId);
+          if (live && r.method !== 'razorpay' && r.method !== 'upi' && /Android/i.test(navigator.userAgent) && openUpiAppDirect(r)) return;
           openRazorpaySheet(r);
         });
       })
@@ -615,9 +617,46 @@
   var UPI_PKG = { gpay: 'com.google.android.apps.nbu.paisa.user', phonepe: 'com.phonepe.app', paytm: 'net.one97.paytm' };
 
   function verifyAndFinish(r, resp) {
+    if (state.finished === r.orderId) return Promise.resolve();
     return api('/api/checkout/verify', { method: 'POST', body: resp })
-      .then(function () { hideWaiting(); paid(r.code); })
-      .catch(function (e) { hideWaiting(); setPaying(false); toast(e.message); });
+      .then(function () { finishPaid(r); })
+      .catch(function () { checkPaid(r); });
+  }
+
+  function finishPaid(r) {
+    if (state.finished === r.orderId) return;
+    state.finished = r.orderId;
+    stopPolling();
+    hideWaiting();
+    paid(r.code);
+  }
+
+  // Ask the server (which asks Razorpay) whether this order is paid yet.
+  function checkPaid(r) {
+    return api('/api/orders/' + r.orderId + '/check').then(function (x) {
+      if (x.order && x.order.status !== 'pending_payment' && x.order.status !== 'failed') finishPaid(r);
+      return x.order;
+    }).catch(function () { return null; });
+  }
+
+  // While the customer is paying, keep checking so the order is placed automatically.
+  function startPolling(r) {
+    stopPolling();
+    var tries = 0;
+    state.poll = setInterval(function () {
+      tries += 1;
+      if (tries > 200) { stopPolling(); return; }
+      checkPaid(r);
+    }, 3000);
+    state.onVisible = function () { if (!document.hidden) checkPaid(r); };
+    document.addEventListener('visibilitychange', state.onVisible);
+  }
+
+  function stopPolling() {
+    if (state.poll) clearInterval(state.poll);
+    state.poll = null;
+    if (state.onVisible) document.removeEventListener('visibilitychange', state.onVisible);
+    state.onVisible = null;
   }
 
   // Opens GPay / PhonePe / Paytm straight away (Razorpay UPI intent). Returns false if not possible.
@@ -630,10 +669,15 @@
       if (typeof rz.createPayment !== 'function') return false;
       rz.on('payment.success', function (resp) { verifyAndFinish(r, resp); });
       rz.on('payment.error', function (resp) {
-        hideWaiting();
-        setPaying(false);
-        var msg = resp && resp.error && resp.error.description;
-        toast(msg ? 'Payment not completed: ' + msg : 'Payment not completed. Please try again.');
+        // Double-check with the server before telling the customer it failed.
+        checkPaid(r).then(function (o) {
+          if (o && o.status !== 'pending_payment' && o.status !== 'failed') return;
+          stopPolling();
+          hideWaiting();
+          setPaying(false);
+          var msg = resp && resp.error && resp.error.description;
+          toast(msg ? 'Payment not completed: ' + msg : 'Payment not completed. Please try again.');
+        });
       });
       rz.createPayment({
         amount: r.razorpay.amount,
@@ -650,6 +694,7 @@
       return false;
     }
     showWaiting(r);
+    startPolling(r);
     return true;
   }
 
@@ -662,11 +707,11 @@
     el.innerHTML = '<div class="sheet-backdrop"></div><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="waitTitle" style="text-align:center;align-items:center">' +
       upiIcon(r.method) +
       '<h2 id="waitTitle">Complete payment in ' + esc(APP_NAME[r.method]) + '</h2>' +
-      '<p class="muted">' + rupees(r.total) + ' for order #' + esc(r.code) + '. Choose your bank and enter your UPI PIN. This page updates by itself once you pay.</p>' +
+      '<p class="muted">' + rupees(r.total) + ' for order #' + esc(r.code) + '. Choose your bank and enter your UPI PIN. Your order is placed automatically as soon as the payment goes through.</p>' +
       '<div class="spinner" style="margin:6px auto" aria-label="Waiting for payment"></div>' +
       '<button type="button" class="btn btn-outline btn-block" data-wait="other">' + esc(APP_NAME[r.method]) + ' didn\'t open? Pay another way</button></div>';
     document.body.appendChild(el);
-    el.querySelector('[data-wait="other"]').addEventListener('click', function () { hideWaiting(); openRazorpaySheet(r); });
+    el.querySelector('[data-wait="other"]').addEventListener('click', function () { hideWaiting(); stopPolling(); openRazorpaySheet(r); });
   }
 
   function hideWaiting() {
@@ -679,10 +724,11 @@
     return loadRazorpay().then(function () {
           // Show the app the customer picked at the top of Razorpay's payment sheet.
           var APP = { gpay: ['google_pay', 'Google Pay'], phonepe: ['phonepe', 'PhonePe'], paytm: ['paytm', 'Paytm'] }[r.method];
+          var live = !/^rzp_test_/.test(r.razorpay.keyId);
           var prefill = Object.assign({}, r.prefill);
           var config;
-          if (APP) {
-            prefill.method = 'upi';
+          if (UPI_IDS.indexOf(r.method) >= 0) prefill.method = 'upi';
+          if (APP && live) {
             config = { display: {
               blocks: { chosen: { name: 'Pay with ' + APP[1], instruments: [{ method: 'upi', flows: ['intent'], apps: [APP[0]] }] } },
               sequence: ['block.chosen'],
@@ -699,7 +745,15 @@
             prefill: prefill,
             theme: { color: '#1F4D3A' },
             handler: function (resp) { verifyAndFinish(r, resp); },
-            modal: { ondismiss: function () { setPaying(false); toast('Payment cancelled. Your order was not placed.'); } }
+            modal: { ondismiss: function () {
+              // Closed the sheet — make sure the payment really didn't go through before saying so.
+              checkPaid(r).then(function (o) {
+                if (o && o.status !== 'pending_payment' && o.status !== 'failed') return;
+                stopPolling();
+                setPaying(false);
+                toast('Payment cancelled. Your order was not placed.');
+              });
+            } }
           };
           if (config) opts.config = config;
           var rz = new window.Razorpay(opts);
@@ -707,6 +761,7 @@
             toast('Payment failed: ' + ((resp && resp.error && resp.error.description) || 'please try again.'));
           });
           rz.open();
+          startPolling(r);
     }).catch(function (e) { setPaying(false); toast(e.message); });
   }
 

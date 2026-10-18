@@ -137,7 +137,7 @@ function emitOrder(row, isNew) {
 // ---- payment → order placed --------------------------------------------
 const markPaidTx = transaction((id, paymentId) => {
   const row = getOrder(id);
-  if (!row || (row.status !== 'pending_payment' && row.status !== 'failed')) return { row, changed: false };
+  if (!row || !['pending_payment', 'failed', 'payment_submitted'].includes(row.status)) return { row, changed: false };
   const now = iso();
   db.prepare("UPDATE orders SET status = 'placed', paid_at = ?, updated_at = ?, rzp_payment_id = COALESCE(?, rzp_payment_id), history = ? WHERE id = ?")
     .run(now, now, paymentId || null, JSON.stringify([{ status: 'placed', at: now }]), id);
@@ -159,6 +159,28 @@ function markPaid(id, paymentId) {
   return row;
 }
 
+// Ask Razorpay directly whether an unpaid order has been paid, and place it if so.
+async function syncWithRazorpay(row) {
+  if (!row || row.status !== 'pending_payment' || !row.rzp_order_id || !rzp.configured()) return row;
+  try {
+    const paymentId = await rzp.paidPaymentId(row.rzp_order_id);
+    if (paymentId) return markPaid(Number(row.id), paymentId);
+  } catch (e) {
+    console.error('[razorpay] check failed for ' + orderCode(row.id) + ':', e.message);
+  }
+  return getOrder(row.id);
+}
+
+// Every minute the server checks recent unpaid orders with Razorpay, so a payment is picked up
+// even if the customer closed the page right after paying.
+if (rzp.configured()) {
+  setInterval(() => {
+    const since = new Date(Date.now() - 3 * 3600e3).toISOString();
+    const rows = db.prepare("SELECT * FROM orders WHERE status = 'pending_payment' AND rzp_order_id IS NOT NULL AND created_at > ? ORDER BY id DESC LIMIT 25").all(since);
+    rows.reduce((p, row) => p.then(() => syncWithRazorpay(row)), Promise.resolve()).catch(() => {});
+  }, 60 * 1000).unref();
+}
+
 // Direct UPI: build the payment link the customer's UPI app opens.
 function upiInfo(row) {
   const amount = Number(row.total).toFixed(2);
@@ -172,10 +194,9 @@ function upiInfo(row) {
   };
 }
 
-// Razorpay can only launch GPay/PhonePe/Paytm with LIVE keys (test mode never opens real UPI apps).
-const RZP_LIVE = rzp.configured() && !/^rzp_test_/.test(process.env.RAZORPAY_KEY_ID || '');
-// Without live Razorpay, GPay/PhonePe/Paytm open directly with the shop's UPI ID and the amount filled in.
-const DIRECT_UPI = !!UPI_ID && !RZP_LIVE;
+// With Razorpay set up, every online payment goes through Razorpay and is confirmed automatically
+// (no "I've paid" button). Direct UPI-ID payments are only a fallback when Razorpay is not set up.
+const DIRECT_UPI = !!UPI_ID && !rzp.configured();
 
 // Payment choices shown at checkout
 function payMethods() {
@@ -522,10 +543,20 @@ route('POST', '/api/checkout/demo-pay', (req, res) => {
   sendJson(res, 200, { order: publicOrder(markPaid(Number(row.id), 'demo')) });
 });
 
+// Has this order been paid yet? (checks Razorpay right away; used while the customer is in their UPI app)
+route('GET', '/api/orders/:id/check', async (req, res) => {
+  const u = needUser(req);
+  if (!allow('check:' + u.id, 120, 60e3)) throw httpError(429, 'Please wait a moment.');
+  const row = db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(int(req.params.id), u.id);
+  if (!row) throw httpError(404, 'Order not found.');
+  const now = await syncWithRazorpay(row);
+  sendJson(res, 200, { order: publicOrder(now) });
+});
+
 // Direct UPI: details to pay one of your own unpaid orders
 route('GET', '/api/orders/:id/upi', (req, res) => {
   const u = needUser(req);
-  if (!UPI_ID) throw httpError(404, 'Not found.');
+  if (!DIRECT_UPI) throw httpError(404, 'Not found.');
   const row = db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(int(req.params.id), u.id);
   if (!row) throw httpError(404, 'Order not found.');
   sendJson(res, 200, { order: publicOrder(row), upi: upiInfo(row) });
@@ -534,7 +565,7 @@ route('GET', '/api/orders/:id/upi', (req, res) => {
 // Direct UPI: customer submits the UPI reference number after paying
 route('POST', '/api/orders/:id/upi-paid', (req, res) => {
   const u = needUser(req);
-  if (!UPI_ID) throw httpError(404, 'Not found.');
+  if (!DIRECT_UPI) throw httpError(404, 'Not found.');
   // The UPI reference number is optional — it just helps the kitchen match the payment.
   const utr = String(req.body.utr || '').replace(/\s/g, '').toUpperCase();
   if (utr && !/^[A-Z0-9]{10,22}$/.test(utr)) throw httpError(400, 'That UPI reference number doesn’t look right. It is usually 12 digits — or leave it empty.');
