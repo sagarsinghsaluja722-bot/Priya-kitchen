@@ -126,7 +126,7 @@
         '<div class="hero-copy"><span class="chip">Daily tiffin service · Fresh &amp; homemade</span>' +
         '<h1>Ghar ka khana,<br>in your tiffin.</h1>' +
         '<p>Choose your tiffin, pay online, and track your order live — from our kitchen to your door.</p>' +
-        '<div class="hero-actions"><a href="#menu" class="btn btn-accent btn-lg">Order a tiffin</a><a href="#/orders" class="btn btn-ghost-light btn-lg">Track my order</a></div></div>' +
+        '<div class="hero-actions"><a href="#menu" class="btn btn-accent btn-lg">Order a tiffin</a></div></div>' +
         '<div class="hero-art"><div class="tile tile-a">Fresh every day</div><div class="tile tile-b">Packed with care</div>' +
         '<div class="tile tile-c"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#1F4D3A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span><strong>Easy payment.</strong> ' + payNote() + '.</span></div></div>' +
       '</div></section>' +
@@ -134,7 +134,7 @@
         step(1, 'Log in with your phone', 'Quick login with your number. First time? Just add your name and address once.') +
         step(2, 'Pick your tiffin', 'Add tiffins and extras to your cart.') +
         step(3, 'Pay your way', payNote() + '. Your order reaches our kitchen on WhatsApp instantly.') +
-        step(4, 'Track it live', 'Follow every step under “Your orders” until your tiffin arrives.') +
+        step(4, 'Fresh at your door', 'You get a WhatsApp message as soon as your order is placed — delivered within ' + ((state.config && state.config.deliveryMinutes) || 30) + ' minutes.') +
       '</div></div></section>' +
       '<section id="menu"><div class="wrap section"><div class="menu-layout">' +
         '<div class="menu-col"><h2>Today\'s tiffins</h2>' + catHtml + cards + '</div>' +
@@ -373,13 +373,24 @@
     if (first) first.focus();
   }
 
-  function viewCodPlaced(code) {
-    var total = state.lastCod && state.lastCod.code === code ? state.lastCod.total : null;
+  // Shown right after an order is placed (paid automatically, or cash on delivery).
+  function viewPlaced(code) {
+    var p = state.lastPlaced && state.lastPlaced.code === code ? state.lastPlaced : {};
+    var mins = (state.config && state.config.deliveryMinutes) || 30;
+    var phone = state.user ? '+91 ' + state.user.phone : 'your number';
+    var payLine = p.cod
+      ? '<div class="notice notice-warn"><strong>Cash on delivery:</strong> please keep ' + (p.total ? '<strong>' + rupees(p.total) + '</strong>' : 'the amount') + ' ready.</div>'
+      : p.checking
+        ? '<div class="notice notice-warn">Priya Kitchen will confirm your payment shortly.</div>'
+        : '<div class="notice notice-ok"><strong>Payment received' + (p.total ? ': ' + rupees(p.total) : '') + '.</strong> Thank you!</div>';
     app.innerHTML = '<section class="page"><div class="narrow" style="max-width:540px"><div class="panel" style="align-items:flex-start">' +
       '<span class="tick">' + ICON_CHECK + '</span><h1>Order placed!</h1>' +
-      '<p>Your order <strong>#' + esc(code) + '</strong> has been sent to Priya Kitchen.</p>' +
-      '<div class="notice notice-warn"><strong>Cash on delivery:</strong> please keep ' + (total ? '<strong>' + rupees(total) + '</strong>' : 'the amount') + ' ready when your tiffin arrives.</div>' +
-      '<div class="row-actions"><a href="#/orders" class="btn btn-primary">Track your order</a><a href="#/" class="btn btn-outline">Back to menu</a></div>' +
+      '<p style="font-size:17px">Your order <strong>#' + esc(code) + '</strong> will reach you within <strong>' + mins + ' minutes</strong>.</p>' +
+      payLine +
+      '<div class="deliver-box" style="flex-direction:row;gap:10px;align-items:center">' +
+        '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1F4D3A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink:0"><path d="M21 12a9 9 0 0 1-13.4 7.9L3 21l1.2-4.4A9 9 0 1 1 21 12z"/></svg>' +
+        '<span>You\'ll get a WhatsApp message on <strong>' + esc(phone) + '</strong> confirming your order.</span></div>' +
+      '<a href="#/" class="btn btn-primary">Back to menu</a>' +
       '</div></div></section>';
   }
 
@@ -428,7 +439,7 @@
           '<details class="utr-more"><summary>Add UPI reference number (optional)</summary>' +
             '<div class="field" style="margin-top:8px"><label for="utr">UPI reference / UTR number</label><input id="utr" class="input" inputmode="numeric" autocomplete="off" maxlength="22" placeholder="12 digits, from your payment details"></div></details>' +
         '</form>' +
-        '<p class="small">Paying to ' + esc(u.payee) + ' (' + esc(u.upiId) + '). Priya Kitchen confirms your payment, then your order is tracked live under “Your orders”.</p>' +
+        '<p class="small">Paying to ' + esc(u.payee) + ' (' + esc(u.upiId) + '). Priya Kitchen confirms your payment and sends you a WhatsApp message.</p>' +
         '</div></div></section>';
       if (mobile) return;
       loadQr().then(function () {
@@ -518,6 +529,7 @@
 
   // ---------- live order updates ----------
   function connectStream() {
+    return;
     if (state.stream || !state.user || !window.EventSource) return;
     var es = new EventSource('/api/orders/stream');
     es.addEventListener('order', function (ev) {
@@ -581,8 +593,8 @@
           saveCart();
           state.orders = null;
           state.lastCod = { code: r.code, total: r.total };
-          state.justPlaced = { code: r.code, text: 'Order #' + r.code + ' placed! Please keep ' + rupees(r.total) + ' ready — cash on delivery.' };
-          location.hash = '#/orders';
+          state.lastPlaced = { code: r.code, total: r.total, cod: true };
+          location.hash = '#/placed/' + r.code;
           return;
         }
         if (r.upi) {
@@ -625,6 +637,7 @@
 
   function finishPaid(r) {
     if (state.finished === r.orderId) return;
+    state.lastTotal = r.total;
     state.finished = r.orderId;
     stopPolling();
     hideWaiting();
@@ -770,9 +783,9 @@
     state.cart = {};
     saveCart();
     state.orders = null;
-    // Payment confirmed automatically → go straight to live order tracking.
-    state.justPlaced = { code: code, text: 'Payment successful — your order #' + code + ' is placed.' };
-    location.hash = '#/orders';
+    // Payment confirmed automatically → "Order placed" screen.
+    state.lastPlaced = { code: code, total: state.lastTotal };
+    location.hash = '#/placed/' + code;
   }
 
   // ---------- events ----------
@@ -870,8 +883,8 @@
       api('/api/orders/' + oid + '/upi-paid', { method: 'POST', body: { utr: utr } })
         .then(function (r) {
           state.orders = null;
-          state.justPlaced = { code: r.order.code, text: 'Order #' + r.order.code + ' sent! Priya Kitchen will confirm your payment shortly.' };
-          location.hash = '#/orders';
+          state.lastPlaced = { code: r.order.code, total: r.order.total, checking: true };
+          location.hash = '#/placed/' + r.order.code;
         })
         .catch(function (err) { btn.disabled = false; toast(err.message); });
     } else if (f === 'profile') {
@@ -930,10 +943,10 @@
     if (r === 'login') {
       if (state.user && state.user.profileComplete && state.login.step !== 'profile') { location.hash = '#/'; return; }
       viewLogin();
-    } else if (r === 'orders') viewOrders();
+    } else if (r === 'orders') { location.hash = '#/'; return; }
     else if (r === 'success') viewSuccess(parts[1] || '');
     else if (r === 'checkout') viewCheckout();
-    else if (r === 'placed') viewCodPlaced(parts[1] || '');
+    else if (r === 'placed') viewPlaced(parts[1] || '');
     else if (r === 'pay') viewPay(parts[1] || '', parts[2] || '');
     else if (r === 'submitted') viewSubmitted(parts[1] || '');
     else {
@@ -969,6 +982,8 @@
       saveCart();
       renderAccount();
       if (state.user && !state.user.profileComplete) state.login.step = 'profile';
+      var ef = document.getElementById('etaFoot');
+      if (ef) ef.textContent = 'Delivered within ' + (state.config.deliveryMinutes || 30) + ' minutes. Order updates on WhatsApp.';
       var pf = document.getElementById('payFoot');
       if (pf) pf.textContent = payNote() + '.';
       connectStream();

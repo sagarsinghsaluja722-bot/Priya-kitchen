@@ -107,6 +107,12 @@
       var badge = o.status === 'delivered' ? 'badge done' : o.status === 'cancelled' ? 'badge cancel' : 'badge';
       var btns = '';
       if (next) btns += '<button type="button" class="btn btn-primary" data-status="' + next[0] + '" data-id="' + o.id + '">' + next[1] + '</button>';
+      // WhatsApp the customer that the order is placed (sent automatically when the WhatsApp Business API is set up)
+      if (o.status !== 'payment_submitted' && o.status !== 'cancelled') {
+        btns += o.customerNotified
+          ? '<span class="btn btn-outline" style="cursor:default;border-color:#2E9B5F;color:#1F4D3A">✓ WhatsApp sent</span>'
+          : '<a class="btn btn-wa" target="_blank" rel="noopener" href="https://wa.me/91' + esc(o.phone) + '?text=' + encodeURIComponent(o.waText || '') + '">Send WhatsApp to customer</a>';
+      }
       var checking = o.status === 'payment_submitted';
       var cod = o.payMethod === 'cod';
       var methodName = { cod: 'Cash on delivery', gpay: 'Google Pay', phonepe: 'PhonePe', paytm: 'Paytm', upi: 'UPI', razorpay: 'Online (Razorpay)', demo: 'Test' }[o.payMethod] || 'Online';
@@ -150,6 +156,7 @@
     return '<form id="settingsForm" class="panel">' +
       '<label class="switch"><input type="checkbox" name="acceptingOrders"' + (s.acceptingOrders ? ' checked' : '') + '> Taking orders now (untick to pause the website)</label>' +
       '<label class="switch"><input type="checkbox" name="codEnabled"' + (s.codEnabled ? ' checked' : '') + '> Allow cash on delivery</label>' +
+      '<div class="field"><label for="mins">Delivery time shown to customers (minutes)</label><input id="mins" name="deliveryMinutes" class="input" type="number" min="5" max="240" step="5" value="' + esc(s.deliveryMinutes) + '"></div>' +
       '<div class="field"><label for="fee">Delivery charge (₹)</label><input id="fee" name="deliveryFee" class="input" type="number" min="0" step="1" value="' + esc(s.deliveryFee) + '"></div>' +
       '<div class="field"><label for="free">Free delivery above (₹, 0 = never)</label><input id="free" name="freeDeliveryAbove" class="input" type="number" min="0" step="1" value="' + esc(s.freeDeliveryAbove) + '"></div>' +
       '<div class="field"><label for="min">Minimum order (₹, 0 = none)</label><input id="min" name="minOrder" class="input" type="number" min="0" step="1" value="' + esc(s.minOrder) + '"></div>' +
@@ -231,6 +238,7 @@
       api('/api/admin/settings', { method: 'PUT', body: {
         acceptingOrders: f.acceptingOrders.checked,
         codEnabled: f.codEnabled.checked,
+        deliveryMinutes: Number(f.deliveryMinutes.value || 30),
         deliveryFee: Number(f.deliveryFee.value || 0),
         freeDeliveryAbove: Number(f.freeDeliveryAbove.value || 0),
         minOrder: Number(f.minOrder.value || 0)

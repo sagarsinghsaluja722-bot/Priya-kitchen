@@ -28,7 +28,7 @@ if (!ADMIN_PASSWORD) {
 const { db, transaction, getSettings, setSetting } = require('./lib/db');
 const otp = require('./lib/otp');
 const rzp = require('./lib/razorpay');
-const { notifyOwner, providerName } = require('./lib/notify');
+const { notifyOwner, notifyCustomer, customerMessage, customerAutoReady, providerName } = require('./lib/notify');
 
 // How customers pay: Razorpay (if keys are set), otherwise direct UPI to your UPI ID.
 const UPI_ID = (process.env.UPI_ID || '').trim();
@@ -91,6 +91,7 @@ function publicOrder(o) {
     status: o.status,
     payMethod: o.pay_method || '',
     utr: o.utr || '',
+    customerNotified: !!o.customer_notified,
     history: JSON.parse(o.history || '[]'),
     createdAt: o.created_at,
     paidAt: o.paid_at,
@@ -144,10 +145,20 @@ const markPaidTx = transaction((id, paymentId) => {
   return { row: getOrder(id), changed: true };
 });
 
+function deliveryMinutes() {
+  return Math.max(5, int(getSettings().delivery_minutes, 30));
+}
+
 function alertOwner(row) {
   notifyOwner(publicOrder(row))
     .then((sent) => { if (sent) db.prepare('UPDATE orders SET notified = 1 WHERE id = ?').run(row.id); })
     .catch((e) => console.error('[whatsapp] alert failed for ' + orderCode(row.id) + ':', e.message));
+  // Placed orders: tell the customer on WhatsApp (automatic when the WhatsApp Business API is set up).
+  if (row.status === 'placed') {
+    notifyCustomer(publicOrder(row), deliveryMinutes())
+      .then((sent) => { if (sent) db.prepare('UPDATE orders SET customer_notified = 1 WHERE id = ?').run(row.id); })
+      .catch((e) => console.error('[whatsapp] customer message failed for ' + orderCode(row.id) + ':', e.message));
+  }
 }
 
 function markPaid(id, paymentId) {
@@ -361,7 +372,8 @@ route('GET', '/api/config', (req, res) => {
     deliveryFee: int(s.delivery_fee),
     freeDeliveryAbove: int(s.free_delivery_above),
     minOrder: int(s.min_order),
-    ownerWhatsapp: (process.env.OWNER_WHATSAPP || '').replace(/\D/g, '')
+    ownerWhatsapp: (process.env.OWNER_WHATSAPP || '').replace(/\D/g, ''),
+    deliveryMinutes: deliveryMinutes()
   });
 });
 
@@ -619,7 +631,7 @@ route('POST', '/api/admin/logout', (req, res) => {
 
 route('GET', '/api/admin/me', (req, res) => {
   needAdmin(req);
-  sendJson(res, 200, { ok: true, whatsapp: providerName(), demo: DEMO, payMode: PAY_MODE, authMode: AUTH_MODE, upiId: UPI_ID });
+  sendJson(res, 200, { ok: true, whatsapp: providerName(), customerWhatsappAuto: customerAutoReady(), demo: DEMO, payMode: PAY_MODE, authMode: AUTH_MODE, upiId: UPI_ID });
 });
 
 route('GET', '/api/admin/orders', (req, res) => {
@@ -629,7 +641,7 @@ route('GET', '/api/admin/orders', (req, res) => {
   const today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10); // date in India
   const todayRows = db.prepare("SELECT total FROM orders WHERE paid_at IS NOT NULL AND status != 'cancelled' AND substr(datetime(paid_at, '+330 minutes'), 1, 10) = ?").all(today);
   sendJson(res, 200, {
-    orders: rows.map(publicOrder),
+    orders: rows.map((r) => { const po = publicOrder(r); po.waText = customerMessage(po, deliveryMinutes()); return po; }),
     today: { count: todayRows.length, revenue: todayRows.reduce((a, r) => a + r.total, 0) }
   });
 });
@@ -707,7 +719,7 @@ route('POST', '/api/admin/reset-pin', (req, res) => {
 route('GET', '/api/admin/settings', (req, res) => {
   needAdmin(req);
   const s = getSettings();
-  sendJson(res, 200, { acceptingOrders: s.accepting_orders === '1', codEnabled: s.cod_enabled === '1', deliveryFee: int(s.delivery_fee), freeDeliveryAbove: int(s.free_delivery_above), minOrder: int(s.min_order) });
+  sendJson(res, 200, { acceptingOrders: s.accepting_orders === '1', codEnabled: s.cod_enabled === '1', deliveryMinutes: deliveryMinutes(), deliveryFee: int(s.delivery_fee), freeDeliveryAbove: int(s.free_delivery_above), minOrder: int(s.min_order) });
 });
 
 route('PUT', '/api/admin/settings', (req, res) => {
@@ -716,6 +728,11 @@ route('PUT', '/api/admin/settings', (req, res) => {
   const updates = [];
   if (b.acceptingOrders !== undefined) updates.push(['accepting_orders', b.acceptingOrders ? '1' : '0']);
   if (b.codEnabled !== undefined) updates.push(['cod_enabled', b.codEnabled ? '1' : '0']);
+  if (b.deliveryMinutes !== undefined) {
+    const m = int(b.deliveryMinutes, -1);
+    if (m < 5 || m > 240) throw httpError(400, 'Delivery time should be between 5 and 240 minutes.');
+    updates.push(['delivery_minutes', m]);
+  }
   for (const [k, key] of [['deliveryFee', 'delivery_fee'], ['freeDeliveryAbove', 'free_delivery_above'], ['minOrder', 'min_order']]) {
     if (b[k] !== undefined) {
       const v = int(b[k], -1);

@@ -212,6 +212,9 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; }
 .sheet-radio { width: 24px; height: 24px; border-radius: 50%; border: 2px solid #9A9488; flex-shrink: 0; }
 .sheet-item.on .sheet-radio { border: 7px solid var(--green); }
 
+.btn-wa { background: #1E8E4E; color: #fff; }
+.btn-wa:hover { background: #17733F; color: #fff; }
+
 /* footer */
 .footer { background: var(--green-dark); color: #E3EEE8; }
 .footer-in { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 26px; padding-top: 44px; padding-bottom: 44px; }
