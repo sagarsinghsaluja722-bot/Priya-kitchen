@@ -1,119 +1,86 @@
 # Priya Kitchen — Ordering Website
 
-A complete, real-time tiffin ordering website:
+Live site: https://priya-kitchen-production.up.railway.app
+Admin page: https://priya-kitchen-production.up.railway.app/admin
 
-- **Customer login with OTP** on their mobile number (first time: name + address, saved for next time)
-- **Menu & cart** for tiffins and add-ons
-- **Prepaid only** — UPI, cards and net banking through **Razorpay**
-- **WhatsApp alert to your number (+91 91407 62014)** the moment an order is paid
-- **“Your orders” page** where customers track each order **live**: Placed → Accepted → Being prepared → Out for delivery → Delivered
-- **Admin page** (`/admin`) for you: new orders pop up with a sound, one tap to move each order to the next step, edit menu and prices, set delivery charge, pause orders
+## What it does
 
-No extra packages to install. It needs only **Node.js 22.13 or newer**.
+**Customers**
+- See the menu (tiffins and add-ons) and add items to a cart
+- Log in with their mobile number and a 4-digit PIN (first time: name and delivery address, saved for next time)
+- Check out: review items, change address, add a note, choose how to pay
+  - Cash on delivery
+  - Google Pay / PhonePe / Paytm / other UPI / cards — through Razorpay, confirmed automatically
+- See "Order placed — reaches you within 30 minutes"
 
----
+**Owner (admin page)**
+- **Orders** — new orders appear instantly with a sound; move each order through Accepted → Preparing → Out for delivery → Delivered, or cancel; one tap to WhatsApp the customer
+- **Menu** — add items, change names/prices/descriptions/categories, hide an item for the day, delete items. Customers see changes immediately.
+- **Settings** — take orders on/off, cash on delivery on/off, delivery time, delivery charge, free-delivery limit, minimum order, reset a customer's PIN
+- **Data** — totals, download a full backup, download all orders as a spreadsheet
 
-## 1. Try it on your computer (test mode)
+## Where the data lives
 
-1. Install Node.js 22 (LTS) from https://nodejs.org
-2. Open a terminal in this folder and run:
-   ```
-   npm run demo
-   ```
-   (On Windows Command Prompt: `set DEMO_MODE=true&& node server.js` — no space before `&&`)
-3. Open http://localhost:3000 — place a test order. The OTP is shown on screen and the payment is simulated.
-4. Open http://localhost:3000/admin — password `admin123` — and move the order through the steps. Watch the customer page update by itself.
-
-Test mode is only for trying things out. **Never turn it on for the real site.**
-
----
-
-## 2. Accounts you need to create (one time)
-
-These need your own PAN / bank details, so you must sign up yourself. Keep every key private.
-
-### A. Razorpay (payments)
-1. Sign up at https://razorpay.com and complete KYC (PAN, bank account, business details).
-2. Dashboard → **Account & Settings → API Keys** → generate keys. Copy **Key ID** and **Key Secret**.
-   - Start with **Test Mode** keys (`rzp_test_...`) to test with fake cards/UPI, then switch to **Live Mode** keys.
-3. Dashboard → **Webhooks → Add new webhook**
-   - URL: `https://YOUR-WEBSITE/api/razorpay/webhook`
-   - Secret: type any long secret and copy it
-   - Event: tick **order.paid**
-   This makes sure an order is still placed even if the customer closes the browser right after paying.
-
-### B. 2Factor.in (OTP SMS)
-1. Sign up at https://2factor.in and buy a small SMS/OTP pack.
-2. Copy your **API key** from the dashboard.
-3. If 2Factor asks you to register a template / DLT, follow their steps and put the template name in `TWOFACTOR_TEMPLATE`.
-
-### C. WhatsApp alerts to your number — choose one
-
-**Option 1 — CallMeBot (free, 5 minutes, recommended to start)**
-1. Go to https://www.callmebot.com/blog/free-api-whatsapp-messages/
-2. Follow the steps there: from **9140762014**, send the activation message they show to their WhatsApp number.
-3. You receive an **API key** on WhatsApp. Put it in `CALLMEBOT_API_KEY` and set `WHATSAPP_PROVIDER=callmebot`.
-
-**Option 2 — Official WhatsApp Business Cloud API (Meta)**
-For higher volume. Create an app at https://developers.facebook.com, add WhatsApp, and get a **permanent access token** and **phone number ID**. Create a message template named `new_order_alert` (category: Utility) with this body:
+Everything — customers, menu, orders, settings — is stored in one SQLite database file:
 
 ```
-New order {{1}} from {{2}}. Items: {{3}}. Total: Rs {{4}} (paid). Address: {{5}}
+/data/priya-kitchen.db        (Railway volume "priya-kitchen-data", mounted at /data)
+/data/backups/                daily backup copies (last 14 kept)
 ```
 
-Set `WHATSAPP_PROVIDER=meta`, `META_WA_TOKEN`, `META_WA_PHONE_NUMBER_ID`, `META_WA_TEMPLATE=new_order_alert`.
+- The Railway **volume** is permanent storage: data survives restarts, redeploys and code updates.
+- A **backup copy** is saved automatically once a day. You can also make one any time (Admin → Data → Back up now).
+- **Download full backup** (Admin → Data) gives you the whole database as one file — keep a copy off the server (phone / Google Drive) every week.
+- **Download orders (Excel)** gives every order as a CSV spreadsheet.
+- To restore a backup: in Railway, stop the service, replace `/data/priya-kitchen.db` with the backup file, start the service.
 
-Even without WhatsApp set up, every paid order appears instantly on your admin page with a sound.
+Unfinished payment attempts are kept in the database but never shown as orders.
 
----
+## Payments
 
-## 3. Put it online (Railway — easiest)
+| Razorpay keys in Railway | What customers see |
+|---|---|
+| none | Cash on delivery (and direct UPI to `UPI_ID`, with owner confirmation) |
+| **test** keys (`rzp_test_…`) | **Cash on delivery only.** Online payment is hidden so no one can "pay" with test money. The owner can switch on *Allow Razorpay TEST payments* in Settings to try it. |
+| **live** keys (`rzp_live_…`) | GPay / PhonePe / Paytm / UPI / cards — the app opens with the amount filled in and the order is placed automatically once paid |
 
-1. Create a free account on https://github.com and upload this folder as a new **private** repository.
-2. Sign up at https://railway.app → **New Project → Deploy from GitHub repo** → pick the repository.
-3. In the service → **Settings → Volumes → Add volume**, mount path `/data`. (This keeps your orders and customers safe when the site restarts.)
-4. In **Variables**, add everything from `.env.example`:
+The server confirms each payment with Razorpay itself: right after payment, while the customer is in the app, through the webhook, and every minute for recent unpaid orders — so a paid order is placed even if the customer closes the page.
 
-   | Variable | Value |
-   |---|---|
-   | `NODE_ENV` | `production` |
-   | `DATA_DIR` | `/data` |
-   | `JWT_SECRET` | any long random text (40+ characters) |
-   | `ADMIN_PASSWORD` | a strong password for `/admin` |
-   | `OWNER_WHATSAPP` | `919140762014` |
-   | `PUBLIC_URL` | your website address |
-   | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | from Razorpay |
-   | `TWOFACTOR_API_KEY` | from 2Factor |
-   | `WHATSAPP_PROVIDER`, `CALLMEBOT_API_KEY` | from step 2C |
+**Razorpay webhook (recommended):** Dashboard → Webhooks → Add: URL `https://priya-kitchen-production.up.railway.app/api/razorpay/webhook`, secret = `RAZORPAY_WEBHOOK_SECRET`, event `order.paid`.
 
-5. **Settings → Networking → Generate Domain** gives you a link like `priya-kitchen.up.railway.app`. You can also connect your own domain (e.g. `priyakitchen.in`, bought from GoDaddy/Hostinger).
-6. Update the Razorpay webhook URL with your real address.
+## Settings (Railway → Priya-kitchen → Variables)
 
-Railway costs roughly US$5/month. Any host that runs Node.js 22 with a persistent disk works too (Render with a disk, a small VPS, etc.).
+| Variable | Purpose |
+|---|---|
+| `ADMIN_PASSWORD` | Password for /admin |
+| `JWT_SECRET` | Long random text that keeps logins secure — never change it casually (logs everyone out) |
+| `DATA_DIR` | `/data` — where the database is stored (the volume) |
+| `NODE_ENV` | `production` |
+| `PUBLIC_URL` | The site address |
+| `OWNER_WHATSAPP` | `919140762014` — owner alerts |
+| `WHATSAPP_PROVIDER`, `CALLMEBOT_API_KEY` | Owner WhatsApp alerts (CallMeBot, free) |
+| `META_WA_TOKEN`, `META_WA_PHONE_NUMBER_ID`, `META_WA_CUSTOMER_TEMPLATE` | Optional: automatic WhatsApp "order placed" message to customers (WhatsApp Business API) |
+| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | Online payments |
+| `UPI_ID`, `UPI_NAME` | Fallback direct-UPI payee when Razorpay is not set |
 
----
+## Run it on a computer (for testing)
 
-## 4. Daily use
+Needs Node.js 22.13 or newer. No packages to install.
 
-- Keep **`/admin` open** on your phone or laptop — new orders ring and flash.
-- Tap **Accept order → Start preparing → Out for delivery → Mark delivered**. The customer’s “Your orders” page updates instantly.
-- **Cancel** only if needed, then refund from the Razorpay dashboard (Payments → select payment → Refund).
-- **Menu** tab: add tiffins, change prices, untick “Available” to hide an item for the day.
-- **Settings** tab: delivery charge, free delivery above an amount, minimum order, and a switch to pause taking orders.
+```
+DEMO_MODE=true node server.js
+```
 
----
+Open http://localhost:3000 (admin: http://localhost:3000/admin, password `admin123` in demo mode).
 
 ## Files
 
 ```
-server.js           the server (all website APIs)
-lib/db.js           database (saved in DATA_DIR/priya-kitchen.db)
-lib/otp.js          OTP login via 2Factor
-lib/razorpay.js     payment creation and verification
-lib/notify.js       WhatsApp alert to the owner
-public/             the customer website and the admin page
-menu.json           starting menu (used only on first run — then edit from /admin)
-.env.example        list of settings to fill in
+server.js          the server and all website APIs
+lib/db.js          database, backups, data overview
+lib/razorpay.js    Razorpay orders, payment checks, webhooks
+lib/notify.js      WhatsApp messages (owner alert, customer confirmation)
+lib/otp.js         SMS OTP login (optional; PIN login is used when not set up)
+public/            customer website (index.html, app.js) and admin page (admin.html, admin.js)
+menu.json          starting menu, used only the very first time
 ```
-
-**Back up** the file `priya-kitchen.db` from your data folder now and then — it holds all customers and orders.

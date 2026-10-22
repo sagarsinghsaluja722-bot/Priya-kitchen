@@ -25,7 +25,7 @@ if (!ADMIN_PASSWORD) {
   process.exit(1);
 }
 
-const { db, transaction, getSettings, setSetting } = require('./lib/db');
+const { db, transaction, getSettings, setSetting, makeBackup, dataStats } = require('./lib/db');
 const otp = require('./lib/otp');
 const rzp = require('./lib/razorpay');
 const { notifyOwner, notifyCustomer, customerMessage, customerAutoReady, providerName } = require('./lib/notify');
@@ -209,26 +209,37 @@ function upiInfo(row) {
 // (no "I've paid" button). Direct UPI-ID payments are only a fallback when Razorpay is not set up.
 const DIRECT_UPI = !!UPI_ID && !rzp.configured();
 
+// Razorpay TEST keys (rzp_test_…) take no real money. So that a customer can never "pay" with fake
+// money and get a paid order, online payment is hidden from customers while test keys are in use,
+// unless the owner switches on "Allow test payments" in Admin → Settings to try it out.
+const RZP_TEST = rzp.configured() && /^rzp_test_/.test(rzp.keyId());
+function onlinePaymentsOn() {
+  return rzp.configured() && (!RZP_TEST || getSettings().test_payments === '1');
+}
+
 // Payment choices shown at checkout
 function payMethods() {
   const s = getSettings();
   const list = [];
-  if (!DIRECT_UPI && rzp.configured()) {
+  if (onlinePaymentsOn()) {
     // Razorpay: the payment sheet opens on the chosen app and confirms the payment automatically.
-    list.push({ id: 'gpay', label: 'Google Pay', sub: 'Opens GPay — order confirmed automatically' });
-    list.push({ id: 'phonepe', label: 'PhonePe', sub: 'Opens PhonePe — order confirmed automatically' });
-    list.push({ id: 'paytm', label: 'Paytm', sub: 'Opens Paytm — order confirmed automatically' });
-    list.push({ id: 'upi', label: 'Other UPI app', sub: 'BHIM, bank apps and more' });
-    list.push({ id: 'razorpay', label: 'Credit / debit card & net banking', sub: 'Visa, Mastercard, RuPay, all banks' });
-  } else if (UPI_ID) {
+    const t = RZP_TEST ? ' (TEST — no real money)' : '';
+    list.push({ id: 'gpay', label: 'Google Pay', sub: 'Opens GPay — order confirmed automatically' + t });
+    list.push({ id: 'phonepe', label: 'PhonePe', sub: 'Opens PhonePe — order confirmed automatically' + t });
+    list.push({ id: 'paytm', label: 'Paytm', sub: 'Opens Paytm — order confirmed automatically' + t });
+    list.push({ id: 'upi', label: 'Other UPI app', sub: 'BHIM, bank apps and more' + t });
+    list.push({ id: 'razorpay', label: 'Credit / debit card & net banking', sub: 'Visa, Mastercard, RuPay, all banks' + t });
+  } else if (DIRECT_UPI) {
     list.push({ id: 'gpay', label: 'Google Pay', sub: 'Pay with the GPay app' });
     list.push({ id: 'phonepe', label: 'PhonePe', sub: 'Pay with the PhonePe app' });
     list.push({ id: 'paytm', label: 'Paytm', sub: 'Pay with the Paytm app' });
     list.push({ id: 'upi', label: 'Other UPI app / QR', sub: 'BHIM, bank apps, or scan a QR code' });
     if (rzp.configured()) list.push({ id: 'razorpay', label: 'Credit / debit card & net banking', sub: 'Visa, Mastercard, RuPay, all banks' });
   }
-  if (s.cod_enabled === '1') list.push({ id: 'cod', label: 'Cash on delivery', sub: 'Pay in cash when your tiffin arrives' });
   if (!list.length && PAY_MODE === 'demo') list.push({ id: 'demo', label: 'Test payment', sub: 'Test mode — no money is taken' });
+  // Cash on delivery is offered when switched on — and always when there is no other way to pay,
+  // so customers can never get stuck at checkout.
+  if (s.cod_enabled === '1' || !list.length) list.push({ id: 'cod', label: 'Cash on delivery', sub: 'Pay in cash when your tiffin arrives' });
   return list;
 }
 
@@ -631,7 +642,11 @@ route('POST', '/api/admin/logout', (req, res) => {
 
 route('GET', '/api/admin/me', (req, res) => {
   needAdmin(req);
-  sendJson(res, 200, { ok: true, whatsapp: providerName(), customerWhatsappAuto: customerAutoReady(), demo: DEMO, payMode: PAY_MODE, authMode: AUTH_MODE, upiId: UPI_ID });
+  sendJson(res, 200, {
+    ok: true, whatsapp: providerName(), customerWhatsappAuto: customerAutoReady(), demo: DEMO,
+    payMode: PAY_MODE, authMode: AUTH_MODE, upiId: UPI_ID,
+    razorpayTest: RZP_TEST, onlinePayments: onlinePaymentsOn()
+  });
 });
 
 route('GET', '/api/admin/orders', (req, res) => {
@@ -716,10 +731,64 @@ route('POST', '/api/admin/reset-pin', (req, res) => {
   sendJson(res, 200, { ok: true });
 });
 
+// ---- data: overview, backups, export ------------------------------------
+route('GET', '/api/admin/data', (req, res) => {
+  needAdmin(req);
+  sendJson(res, 200, dataStats());
+});
+
+route('POST', '/api/admin/backup', (req, res) => {
+  needAdmin(req);
+  const b = makeBackup();
+  sendJson(res, 200, { ok: true, name: b.name, data: dataStats() });
+});
+
+// Download a fresh, complete copy of the shop's data (one .db file).
+route('GET', '/api/admin/backup/download', (req, res) => {
+  needAdmin(req);
+  const b = makeBackup();
+  const st = fs.statSync(b.file);
+  res.writeHead(200, {
+    ...SECURITY_HEADERS,
+    'Content-Type': 'application/octet-stream',
+    'Content-Length': st.size,
+    'Content-Disposition': `attachment; filename="${b.name}"`,
+    'Cache-Control': 'no-store'
+  });
+  fs.createReadStream(b.file).pipe(res);
+});
+
+// All orders as a spreadsheet (opens in Excel / Google Sheets).
+route('GET', '/api/admin/orders.csv', (req, res) => {
+  needAdmin(req);
+  const cell = (v) => {
+    let t = String(v == null ? '' : v);
+    if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; // stop spreadsheet formulas
+    return '"' + t.replace(/"/g, '""') + '"';
+  };
+  const ist = (iso) => (iso ? new Date(new Date(iso).getTime() + 5.5 * 3600e3).toISOString().replace('T', ' ').slice(0, 16) : '');
+  const rows = db.prepare("SELECT * FROM orders WHERE status NOT IN ('pending_payment', 'failed') ORDER BY id DESC").all();
+  const lines = [['Order', 'Date (IST)', 'Customer', 'Phone', 'Address', 'Items', 'Subtotal', 'Delivery', 'Total', 'Payment', 'Paid at (IST)', 'Status', 'Note']]
+    .concat(rows.map((o) => [
+      orderCode(o.id), ist(o.created_at), o.name, o.phone, o.address,
+      JSON.parse(o.items).map((l) => l.qty + ' x ' + l.name).join('; '),
+      o.subtotal, o.delivery_fee, o.total, o.pay_method || 'online', ist(o.paid_at), o.status, o.note
+    ]));
+  const body = '﻿' + lines.map((r) => r.map(cell).join(',')).join('\r\n');
+  const day = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+  res.writeHead(200, {
+    ...SECURITY_HEADERS,
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': `attachment; filename="priya-kitchen-orders-${day}.csv"`,
+    'Cache-Control': 'no-store'
+  });
+  res.end(body);
+});
+
 route('GET', '/api/admin/settings', (req, res) => {
   needAdmin(req);
   const s = getSettings();
-  sendJson(res, 200, { acceptingOrders: s.accepting_orders === '1', codEnabled: s.cod_enabled === '1', deliveryMinutes: deliveryMinutes(), deliveryFee: int(s.delivery_fee), freeDeliveryAbove: int(s.free_delivery_above), minOrder: int(s.min_order) });
+  sendJson(res, 200, { acceptingOrders: s.accepting_orders === '1', codEnabled: s.cod_enabled === '1', testPayments: s.test_payments === '1', razorpayTest: RZP_TEST, deliveryMinutes: deliveryMinutes(), deliveryFee: int(s.delivery_fee), freeDeliveryAbove: int(s.free_delivery_above), minOrder: int(s.min_order) });
 });
 
 route('PUT', '/api/admin/settings', (req, res) => {
@@ -728,6 +797,7 @@ route('PUT', '/api/admin/settings', (req, res) => {
   const updates = [];
   if (b.acceptingOrders !== undefined) updates.push(['accepting_orders', b.acceptingOrders ? '1' : '0']);
   if (b.codEnabled !== undefined) updates.push(['cod_enabled', b.codEnabled ? '1' : '0']);
+  if (b.testPayments !== undefined) updates.push(['test_payments', b.testPayments ? '1' : '0']);
   if (b.deliveryMinutes !== undefined) {
     const m = int(b.deliveryMinutes, -1);
     if (m < 5 || m > 240) throw httpError(400, 'Delivery time should be between 5 and 240 minutes.');

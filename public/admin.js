@@ -85,14 +85,20 @@
   // ---------- shell ----------
   function render() {
     document.getElementById('logoutBtn').classList.remove('hidden');
-    var tabs = [['orders', 'Orders'], ['menu', 'Menu'], ['settings', 'Settings']];
+    var tabs = [['orders', 'Orders'], ['menu', 'Menu'], ['settings', 'Settings'], ['data', 'Data']];
     var html = '<div class="medium" style="max-width:1000px">' +
       '<div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;align-items:center"><h1>Dashboard</h1><span class="live">Live</span></div>' +
       '<div class="tabs" role="tablist">' + tabs.map(function (t) { return '<button type="button" class="pill" role="tab" data-tab="' + t[0] + '" aria-pressed="' + (state.tab === t[0]) + '">' + t[1] + '</button>'; }).join('') + '</div>';
+    if (state.info && state.info.razorpayTest) {
+      html += state.info.onlinePayments
+        ? '<div class="notice notice-err"><strong>TEST payments are ON.</strong> Payments made now are not real money, but orders show as paid. Turn this off in Settings before real customers order.</div>'
+        : '<div class="notice notice-warn"><strong>Online payment is off for customers</strong> — Razorpay is still on test keys. Customers can order with cash on delivery. Add your live Razorpay keys to turn on GPay / PhonePe / Paytm.</div>';
+    }
     if (state.info && state.info.whatsapp === 'none') html += '<div class="notice notice-warn">WhatsApp alerts are not set up yet. Set WHATSAPP_PROVIDER in your settings (see README). New orders still appear here with a sound.</div>';
     if (state.info && state.info.demo) html += '<div class="notice notice-warn">DEMO MODE is on. Turn it off before going live.</div>';
     if (state.tab === 'orders') html += ordersHtml();
     else if (state.tab === 'menu') html += menuHtml();
+    else if (state.tab === 'data') html += dataHtml();
     else html += settingsHtml();
     root.innerHTML = html + '</div>';
   }
@@ -116,6 +122,7 @@
       var checking = o.status === 'payment_submitted';
       var cod = o.payMethod === 'cod';
       var methodName = { cod: 'Cash on delivery', gpay: 'Google Pay', phonepe: 'PhonePe', paytm: 'Paytm', upi: 'UPI', razorpay: 'Online (Razorpay)', demo: 'Test' }[o.payMethod] || 'Online';
+      if (state.info && state.info.razorpayTest && !cod) methodName += ' — TEST, no real money';
       if (o.status !== 'cancelled' && o.status !== 'delivered') btns += '<button type="button" class="btn btn-danger" data-status="cancelled" data-id="' + o.id + '">' + (checking ? 'Payment not received' : 'Cancel') + '</button>';
       return '<article class="admin-order' + (state.fresh[o.id] ? ' fresh' : '') + '">' +
         (checking ? '<div class="notice notice-warn">Check your UPI / bank app for <strong>' + rupees(o.total) + '</strong> from ' + esc(o.name) + (o.utr ? ' (reference <strong>' + esc(o.utr) + '</strong>)' : '') + '. If it arrived, tap “Payment received”.</div>' : '') +
@@ -156,6 +163,7 @@
     return '<form id="settingsForm" class="panel">' +
       '<label class="switch"><input type="checkbox" name="acceptingOrders"' + (s.acceptingOrders ? ' checked' : '') + '> Taking orders now (untick to pause the website)</label>' +
       '<label class="switch"><input type="checkbox" name="codEnabled"' + (s.codEnabled ? ' checked' : '') + '> Allow cash on delivery</label>' +
+      (s.razorpayTest ? '<label class="switch"><input type="checkbox" name="testPayments"' + (s.testPayments ? ' checked' : '') + '> Allow Razorpay TEST payments (for your own testing only — no real money)</label>' : '') +
       '<div class="field"><label for="mins">Delivery time shown to customers (minutes)</label><input id="mins" name="deliveryMinutes" class="input" type="number" min="5" max="240" step="5" value="' + esc(s.deliveryMinutes) + '"></div>' +
       '<div class="field"><label for="fee">Delivery charge (₹)</label><input id="fee" name="deliveryFee" class="input" type="number" min="0" step="1" value="' + esc(s.deliveryFee) + '"></div>' +
       '<div class="field"><label for="free">Free delivery above (₹, 0 = never)</label><input id="free" name="freeDeliveryAbove" class="input" type="number" min="0" step="1" value="' + esc(s.freeDeliveryAbove) + '"></div>' +
@@ -173,6 +181,33 @@
     return api('/api/admin/orders?scope=' + state.scope).then(function (r) { state.orders = r.orders; state.today = r.today; });
   }
   function loadMenu() { return api('/api/admin/menu').then(function (r) { state.menu = r.items; }); }
+  function loadData() { return api('/api/admin/data').then(function (r) { state.data = r; }); }
+
+  function size(b) { return b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB'; }
+
+  function dataHtml() {
+    var d = state.data || { backups: [] };
+    var last = d.backups[0];
+    return '<div class="stats">' +
+        '<div class="stat"><b>' + (d.customers || 0) + '</b><span>Customers</span></div>' +
+        '<div class="stat"><b>' + (d.orders || 0) + '</b><span>Orders</span></div>' +
+        '<div class="stat"><b>' + (d.menuItems || 0) + '</b><span>Menu items</span></div>' +
+        '<div class="stat"><b>' + size(d.dbBytes || 0) + '</b><span>Data size</span></div></div>' +
+      '<div class="panel"><h2 class="display" style="font-size:22px">Where your data is kept</h2>' +
+        '<p>All customers, the menu, orders and settings are saved in one database on your Railway server’s permanent storage. It stays safe when the site restarts or is updated.</p>' +
+        '<p class="muted" style="font-size:14px">A backup copy is made automatically every day (the last 14 days are kept). ' +
+        (last ? 'Last backup: <strong>' + esc(when(last.at)) + '</strong>.' : 'The first backup is made a few seconds after the site starts.') + '</p>' +
+        '<div class="status-btns">' +
+          '<a class="btn btn-primary" href="/api/admin/backup/download">Download full backup</a>' +
+          '<a class="btn btn-outline" href="/api/admin/orders.csv">Download orders (Excel)</a>' +
+          '<button type="button" class="btn btn-outline" data-backup-now="1">Back up now</button>' +
+        '</div>' +
+        '<p class="muted" style="font-size:14px">Tip: download a full backup once a week and keep it on your phone or Google Drive.</p></div>' +
+      (d.backups.length ? '<div class="panel"><strong>Saved backups on the server</strong><div class="table-wrap">' +
+        d.backups.map(function (b) { return '<div style="display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px dashed var(--line)"><span>' + esc(when(b.at)) + '</span><span class="muted">' + size(b.size) + '</span></div>'; }).join('') +
+        '</div></div>' : '');
+  }
+
   function loadSettings() { return api('/api/admin/settings').then(function (r) { state.settings = r; }); }
 
   function connect() {
@@ -203,7 +238,7 @@
     var t = e.target.closest('[data-tab]');
     if (t) {
       state.tab = t.getAttribute('data-tab');
-      var p = state.tab === 'orders' ? loadOrders() : state.tab === 'menu' ? loadMenu() : loadSettings();
+      var p = state.tab === 'orders' ? loadOrders() : state.tab === 'menu' ? loadMenu() : state.tab === 'data' ? loadData() : loadSettings();
       p.then(render).catch(function (err) { toast(err.message); });
       return;
     }
@@ -220,6 +255,14 @@
         .then(function () { return loadOrders(); })
         .then(function () { render(); toast('Updated — the customer sees it live.'); })
         .catch(function (err) { st.disabled = false; toast(err.message); });
+      return;
+    }
+    var bk = e.target.closest('[data-backup-now]');
+    if (bk) {
+      bk.disabled = true;
+      api('/api/admin/backup', { method: 'POST', body: {} })
+        .then(function (r) { state.data = r.data; render(); toast('Backup saved.'); })
+        .catch(function (err) { bk.disabled = false; toast(err.message); });
       return;
     }
     var del = e.target.closest('[data-delete]');
@@ -239,10 +282,11 @@
         acceptingOrders: f.acceptingOrders.checked,
         codEnabled: f.codEnabled.checked,
         deliveryMinutes: Number(f.deliveryMinutes.value || 30),
+        testPayments: f.testPayments ? f.testPayments.checked : undefined,
         deliveryFee: Number(f.deliveryFee.value || 0),
         freeDeliveryAbove: Number(f.freeDeliveryAbove.value || 0),
         minOrder: Number(f.minOrder.value || 0)
-      } }).then(loadSettings).then(function () { render(); toast('Settings saved.'); }).catch(function (err) { toast(err.message); });
+      } }).then(loadSettings).then(function () { return api('/api/admin/me').then(function (i) { state.info = i; }); }).then(function () { render(); toast('Settings saved.'); }).catch(function (err) { toast(err.message); });
       return;
     }
     if (f.id === 'pinForm') {
